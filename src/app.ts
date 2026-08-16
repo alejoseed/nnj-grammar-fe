@@ -3,22 +3,16 @@ import { parseAnalysisDocument } from "./types";
 
 export type GraphRenderer = (host: HTMLElement, model: GraphNode) => void;
 
-export async function loadAnalysisDocument(
-  url: URL,
-  fetcher: typeof fetch = fetch,
-) {
-  const response = await fetcher(url);
+export async function loadAnalysisDocument(url: URL) {
+  const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`fixture request failed: ${response.status}`);
   }
   return parseAnalysisDocument(await response.json());
 }
 
-export async function analyzeText(
-  text: string,
-  fetcher: typeof fetch = fetch,
-) {
-  const response = await fetcher("/api/analyze", {
+export async function analyzeText(text: string) {
+  const response = await fetch("/api/analyze", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text }),
@@ -33,7 +27,7 @@ function showGraphError(host: HTMLElement): void {
   const error = document.createElement("p");
   error.setAttribute("role", "alert");
   error.className =
-    "m-8 rounded border border-red-300 bg-red-50 p-4 text-sm text-red-900";
+    "m-8 rounded border border-shu/40 bg-shu/5 p-4 text-sm text-shu";
   error.textContent = "Unable to load grammar graph.";
   host.replaceChildren(error);
 }
@@ -42,10 +36,9 @@ export async function mountFixtureGraph(
   host: HTMLElement,
   url: URL,
   render: GraphRenderer,
-  fetcher: typeof fetch = fetch,
 ): Promise<void> {
   try {
-    const document = await loadAnalysisDocument(url, fetcher);
+    const document = await loadAnalysisDocument(url);
     render(host, buildGraphModel(document));
   } catch {
     showGraphError(host);

@@ -1,6 +1,6 @@
 import { timerFlush } from "d3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import fixture from "../../tests/fixtures/analysis-soshite.json";
+import fixture from "../../nnj-grammar/tests/fixtures/analysis-soshite.json";
 import { buildGraphModel } from "./graph-model";
 import { renderGraph } from "./graph";
 import type { AnalysisDocument } from "./types";
@@ -25,7 +25,7 @@ describe("renderGraph", () => {
     expect(svg?.getAttribute("preserveAspectRatio")).toBe("xMidYMid meet");
     expect(svg?.getAttribute("role")).toBe("tree");
     expect(svg?.getAttribute("aria-label")).toBe("Grammar analysis tree");
-    expect(svg?.classList.contains("bg-[#f1f5f9]")).toBe(true);
+    expect(svg?.classList.contains("bg-washi")).toBe(true);
     expect(host.querySelectorAll(".graph-node")).toHaveLength(7);
     expect(host.querySelectorAll(".graph-link")).toHaveLength(6);
     expect(
@@ -55,39 +55,44 @@ describe("renderGraph", () => {
     expect(node?.getAttribute("role")).toBe("treeitem");
     expect(node?.getAttribute("tabindex")).toBe("0");
     expect(node?.getAttribute("aria-label")).toContain("なによりも");
-    expect(node?.querySelector("circle")?.getAttribute("fill")).toBe("#4daf4a");
+    expect(
+      node?.querySelector("circle")?.classList.contains("fill-washi"),
+    ).toBe(true);
     expect(
       host
         .querySelector("#graph-node-document-0 circle")
-        ?.getAttribute("fill"),
-    ).toBe("#1f77b4");
+        ?.classList.contains("fill-aizome"),
+    ).toBe(true);
   });
 
   it.each(["mouseenter", "focus"])(
-    "applies orange emphasis on %s",
+    "applies vermilion emphasis on %s",
     (eventName) => {
       const node = host.querySelector<SVGGElement>("#graph-node-bunsetsu-0-1")!;
       node.dispatchEvent(new Event(eventName));
       vi.advanceTimersByTime(200);
       timerFlush();
       expect(node.querySelector("circle")?.getAttribute("r")).toBe("10");
-      expect(node.querySelector("circle")?.getAttribute("fill")).toBe(
-        "#ff7f0e",
+      expect(node.querySelector<SVGCircleElement>("circle")?.style.fill).toBe(
+        "var(--color-shu)",
       );
       expect(node.querySelector<SVGTextElement>("text")?.style.fontWeight).toBe(
         "bold",
       );
       expect(node.querySelector<SVGTextElement>("text")?.style.fill).toBe(
-        "rgb(255, 127, 14)",
+        "var(--color-shu)",
       );
 
       node.dispatchEvent(
         new Event(eventName === "mouseenter" ? "mouseleave" : "blur"),
       );
       expect(node.querySelector("circle")?.getAttribute("r")).toBe("6");
-      expect(node.querySelector("circle")?.getAttribute("fill")).toBe(
-        "#4daf4a",
+      expect(node.querySelector<SVGCircleElement>("circle")?.style.fill).toBe(
+        "",
       );
+      expect(
+        node.querySelector("circle")?.classList.contains("fill-washi"),
+      ).toBe(true);
       expect(node.querySelector<SVGTextElement>("text")?.style.fill).toBe("");
       expect(node.querySelector<SVGTextElement>("text")?.style.fontWeight).toBe(
         "normal",

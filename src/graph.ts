@@ -5,9 +5,9 @@ const MARGIN = { top: 20, right: 120, bottom: 20, left: 200 };
 const INNER_WIDTH = 1200 - MARGIN.left - MARGIN.right;
 const INNER_HEIGHT = 800 - MARGIN.top - MARGIN.bottom;
 
-const ROOT_COLOR = "#1f77b4";
-const DESCENDANT_COLOR = "#4daf4a";
-const EMPHASIS_COLOR = "#ff7f0e";
+// Palette tokens live in styles.css (@theme). Resting colors are Tailwind
+// classes; emphasis is an inline style so it wins over them while active.
+const EMPHASIS_COLOR = "var(--color-shu)";
 
 type PointNode = d3.HierarchyPointNode<GraphNode>;
 type NodeSelection = d3.Selection<SVGGElement, PointNode, d3.BaseType, unknown>;
@@ -20,8 +20,11 @@ function screenY(point: { x: number; y: number }): number {
   return point.x + 40;
 }
 
-function restingCircleColor(point: PointNode): string {
-  return point.depth === 0 ? ROOT_COLOR : DESCENDANT_COLOR;
+function restingFillClass(point: PointNode): string {
+  if (point.depth === 0) {
+    return "fill-aizome";
+  }
+  return point.data.kind === "relation" ? "fill-moss" : "fill-washi";
 }
 
 function ariaLabel(node: GraphNode): string {
@@ -34,13 +37,10 @@ function ariaLabel(node: GraphNode): string {
 }
 
 function applyEmphasis(group: NodeSelection, active: boolean): void {
-  const point = group.datum();
-  const circleColor = active ? EMPHASIS_COLOR : restingCircleColor(point);
-
   group
     .select<SVGCircleElement>("circle")
     .attr("r", active ? 10 : 6)
-    .attr("fill", circleColor);
+    .style("fill", active ? EMPHASIS_COLOR : "");
 
   group.selectAll<SVGTextElement, unknown>("text").each(function () {
     this.style.fill = active ? EMPHASIS_COLOR : "";
@@ -61,7 +61,7 @@ export function renderGraph(host: HTMLElement, model: GraphNode): void {
     .attr("preserveAspectRatio", "xMidYMid meet")
     .attr("role", "tree")
     .attr("aria-label", "Grammar analysis tree")
-    .attr("class", "block h-full w-full bg-[#f1f5f9] font-sans text-[12px]");
+    .attr("class", "block h-full w-full bg-washi font-sans text-[12px]");
 
   const viewport = svg.append("g").attr("data-layer", "viewport");
   const plot = viewport
@@ -78,9 +78,8 @@ export function renderGraph(host: HTMLElement, model: GraphNode): void {
     .selectAll("path.graph-link")
     .data(root.links())
     .join("path")
-    .attr("class", "graph-link stroke-[#94a3b8] fill-none")
-    .attr("stroke-width", 1)
-    .attr("stroke-opacity", 0.6)
+    .attr("class", "graph-link fill-none stroke-mist")
+    .attr("stroke-width", 1.5)
     .attr("d", linkPath);
 
   const node: NodeSelection = plot
@@ -96,17 +95,24 @@ export function renderGraph(host: HTMLElement, model: GraphNode): void {
 
   node
     .append("circle")
-    .attr("class", "stroke-[#555] transition-all duration-200")
+    .attr(
+      "class",
+      (point) =>
+        `stroke-fog transition-all duration-200 ${restingFillClass(point)}`,
+    )
     .attr("r", 6)
-    .attr("fill", (point) => restingCircleColor(point))
     .attr("stroke-width", 1);
 
   node
     .filter((point) => point.data.primaryLabel !== "")
     .append("text")
+    // Rule names are matches — they read green; everything else is interface indigo.
     .attr(
       "class",
-      "graph-primary-label fill-[#333] text-[12px] transition-all duration-200",
+      (point) =>
+        `graph-primary-label text-[12px] transition-all duration-200 ${
+          point.data.kind === "relation" ? "fill-moss" : "fill-aizome"
+        }`,
     )
     .attr("x", (point) => (point.children ? -10 : 10))
     .attr("dy", (point) => (point.children ? "-1.5em" : ".35em"))
@@ -118,7 +124,7 @@ export function renderGraph(host: HTMLElement, model: GraphNode): void {
     .append("text")
     .attr(
       "class",
-      "graph-secondary-label fill-[#555] text-[10px] italic transition-all duration-200",
+      "graph-secondary-label fill-fog text-[10px] italic transition-all duration-200",
     )
     .attr("x", (point) => (point.children ? -10 : 10))
     .attr("dy", (point) => (point.children ? "-.5em" : "1.5em"))

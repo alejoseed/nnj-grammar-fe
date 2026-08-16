@@ -133,6 +133,7 @@ function spanTokens(
 }
 
 export function buildGraphModel(document: AnalysisDocument): GraphNode {
+  console.log("Printing the document", document)
   const ordered = buildOrderedTree(document.tree);
   if (ordered.node.kind !== "document") {
     throw new Error("tree root must be a document");

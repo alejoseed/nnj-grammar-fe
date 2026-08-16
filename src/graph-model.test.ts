@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import fixture from "../../tests/fixtures/analysis-soshite.json";
+import fixture from "../../nnj-grammar/tests/fixtures/analysis-soshite.json";
 import type { AnalysisDocument } from "./types";
 import { buildGraphModel, buildOrderedTree } from "./graph-model";
 

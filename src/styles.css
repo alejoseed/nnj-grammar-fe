@@ -1,1 +1,18 @@
 @import "tailwindcss";
+
+/*
+ * Palette roles are fixed, hexes are tunable:
+ * green means "the engine matched", vermilion means "look here" (<2% of
+ * the screen), indigo means "interface". See memory/color-palette.md.
+ */
+@theme {
+  --color-washi: #f7f5f0; /* warm paper — light mode base */
+  --color-sumi: #12151e; /* near-black indigo — dark mode base, someday */
+  --color-aizome: #232f52; /* indigo — primary UI, sentence nodes, buttons */
+  --color-aizome-deep: #1b2440; /* indigo hover */
+  --color-fog: #5a6478; /* faded slate — secondary text, readings, POS */
+  --color-mist: #dbd9d2; /* borders, tree links, dividers */
+  --color-moss: #2f7d5b; /* detected/matched only */
+  --color-shu: #c73e3a; /* attention only — tiny doses */
+  --color-kohaku: #c9a227; /* optional: secondary/suppressed matches */
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import fixture from "../../tests/fixtures/analysis-soshite.json";
+import fixture from "../../nnj-grammar/tests/fixtures/analysis-soshite.json";
 import { parseAnalysisDocument } from "./types";
 
 describe("parseAnalysisDocument", () => {
