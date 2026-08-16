@@ -2,6 +2,8 @@ import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./tests",
+  // Only browser specs; *.test.ts files in this folder belong to vitest.
+  testMatch: "**/*.spec.ts",
   fullyParallel: false,
   use: {
     baseURL: "http://127.0.0.1:5173",
