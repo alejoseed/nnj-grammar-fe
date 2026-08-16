@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { analyzeText } from "./app";
+import { DictionaryCard } from "./dictionary-card";
 import { renderGraph } from "./graph";
 import { buildGraphModel } from "./graph-model";
 import type { AnalysisDocument } from "./types";
@@ -68,6 +69,19 @@ export function App() {
       </form>
 
       <div className="min-h-0 flex-1" ref={graphHost} />
+
+      {doc && doc.primary_matches.length > 0 && (
+        <section className="max-h-[40%] overflow-y-auto border-t border-mist p-4">
+          <h2 className="mb-3 text-sm font-medium tracking-widest text-fog">
+            DETECTED GRAMMAR
+          </h2>
+          <div className="flex flex-col gap-3">
+            {doc.primary_matches.map((match) => (
+              <DictionaryCard key={match.id} match={match} />
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   );
 }

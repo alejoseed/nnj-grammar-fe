@@ -3,6 +3,8 @@ import { parseAnalysisDocument } from "./types";
 
 export type GraphRenderer = (host: HTMLElement, model: GraphNode) => void;
 
+const API_BASE: string = import.meta.env.VITE_API_URL ?? "";
+
 export async function loadAnalysisDocument(url: URL) {
   const response = await fetch(url);
   if (!response.ok) {
@@ -12,7 +14,7 @@ export async function loadAnalysisDocument(url: URL) {
 }
 
 export async function analyzeText(text: string) {
-  const response = await fetch("/api/analyze", {
+  const response = await fetch(`${API_BASE}/api/analyze`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text }),

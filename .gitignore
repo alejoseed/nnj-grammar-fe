@@ -12,3 +12,4 @@ tools/__pycache__/
 /web/playwright-report/
 /data/
 /node_modules
+/dist
