@@ -1,0 +1,13 @@
+/target
+Cargo.lock
+/grammar/local/
+*.bunpro-local.json
+tools/__pycache__/
+/.superpowers/
+/sessions.json
+/claude-output.md
+/web/node_modules/
+/web/dist/
+/web/test-results/
+/web/playwright-report/
+/data/
