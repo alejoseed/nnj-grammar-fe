@@ -50,6 +50,28 @@ test("renders and navigates the Hanabira-faithful graph", async ({ page }) => {
   );
   await expect(plot).toHaveAttribute("transform", "translate(200,20)");
 
+  await page.getByRole("button", { name: "Reset graph view" }).click();
+  await expect
+    .poll(() => viewport.getAttribute("transform"))
+    .toBe(initialTransform);
+  await expect(plot).toHaveAttribute("transform", "translate(200,20)");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(svg).toHaveAttribute("viewBox", "0 0 1200 800");
+  await page.getByRole("button", { name: "Reset graph view" }).click();
+  await expect(svg).toHaveAttribute("viewBox", /^0 0 390 \d+$/);
+  await expect
+    .poll(() => viewport.getAttribute("transform"))
+    .not.toBe(initialTransform);
+
+  await page.setViewportSize({ width: 1200, height: 800 });
+  await expect(svg).toHaveAttribute("viewBox", /^0 0 390 \d+$/);
+  await page.getByRole("button", { name: "Reset graph view" }).click();
+  await expect(svg).toHaveAttribute("viewBox", "0 0 1200 800");
+  await expect
+    .poll(() => viewport.getAttribute("transform"))
+    .toBe(initialTransform);
+
   await page.reload();
   await expect(page.locator("svg[role=tree]")).toBeVisible();
   await page.screenshot({

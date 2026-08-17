@@ -36,7 +36,10 @@ export function DictionaryCard({ match, suppression }: DictionaryCardProps) {
         </p>
       )}
       {match.provenance.map((entry) => (
-        <p key={`${entry.source.id}-${entry.rule_id}`} className="mt-2 text-xs text-fog">
+        <p
+          key={`${entry.source.id}:${entry.rule_id}:${entry.variant_id}`}
+          className="mt-2 text-xs text-fog"
+        >
           source: {entry.source.label} · {entry.rule_id}
         </p>
       ))}
