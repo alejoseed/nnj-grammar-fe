@@ -111,7 +111,13 @@ function applyEmphasis(group: NodeSelection, active: boolean): void {
   });
 }
 
-export function renderGraph(host: HTMLElement, model: GraphNode): void {
+// Activation returns true only when handled, so desktop keyboard behavior
+// remains untouched. Event bindings do not participate in SVG layout.
+export function renderGraph(
+  host: HTMLElement,
+  model: GraphNode,
+  onActivate?: (node: GraphNode, element: SVGGElement) => boolean,
+): void {
   host.replaceChildren();
 
   const layout = d3
@@ -255,6 +261,25 @@ export function renderGraph(host: HTMLElement, model: GraphNode): void {
     .on("blur", function () {
       updateEmphasis(this, "focused", false);
     });
+
+  if (onActivate) {
+    node
+      .on("click.dictionary", function (event: MouseEvent, point) {
+        if (!event.defaultPrevented) {
+          onActivate(point.data, this);
+        }
+      })
+      .on("keydown.dictionary", function (event: KeyboardEvent, point) {
+        if (
+          !event.repeat &&
+          (event.key === "Enter" || event.key === " ") &&
+          onActivate(point.data, this)
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+      });
+  }
 
   const zoom = d3
     .zoom<SVGSVGElement, unknown>()

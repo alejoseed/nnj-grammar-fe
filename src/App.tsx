@@ -1,18 +1,45 @@
-import { useEffect, useRef, useState } from "react";
-import { analyzeText } from "./app";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { analyzeText } from "./api";
 import { DictionaryCard } from "./dictionary-card";
+import type { DictionarySelection } from "./dictionary-entry";
+import { resolveDictionarySelection } from "./dictionary-model";
 import { renderGraph } from "./graph";
-import { buildGraphModel } from "./graph-model";
+import { buildGraphModel, type GraphNode } from "./graph-model";
 import type { AnalysisDocument } from "./types";
 import PhraseBank from "./phrase-bank";
+import { MobileDictionary, MOBILE_DICTIONARY_QUERY } from "./mobile-dictionary";
 
 const SEED_SENTENCE = "東京しか行かない";
+
+const statusString = (a: number, b: number) => `${a} tokens · ${b} ${b === 1 ? "match" : "matches"}`;
 
 export function App() {
   const [sentence, setSentence] = useState(SEED_SENTENCE);
   const [status, setStatus] = useState("");
   const [doc, setDoc] = useState<AnalysisDocument | null>(null);
   const graphHost = useRef<HTMLDivElement>(null);
+  const [dictionary, setDictionary] = useState<DictionarySelection | null>(null);
+  const dictionaryOrigin = useRef<SVGGElement | null>(null);
+
+  const openDictionary = useCallback((node: GraphNode, element: SVGGElement): boolean => {
+    if (!doc || !window.matchMedia(MOBILE_DICTIONARY_QUERY).matches) {
+      return false;
+    }
+
+    const selection = resolveDictionarySelection(doc, node);
+
+    if (!selection) {
+      return false;
+    }
+
+    dictionaryOrigin.current = element;
+    setDictionary(selection);
+    return true;
+  }, [doc]);
+
+  const closeDictionary = useCallback(() => {
+    setDictionary(null);
+  }, []);
 
   async function analyze(text: string): Promise<void> {
     const trimmed = text.trim();
@@ -23,8 +50,9 @@ export function App() {
     try {
       const next = await analyzeText(trimmed);
       setDoc(next);
+      setDictionary(null);
       setStatus(
-        `${next.tokens.length} tokens · ${next.primary_matches.length} matches`,
+        statusString(next.tokens.length, next.primary_matches.length)
       );
     } catch {
       // Preserve the current graph on failure — just report it.
@@ -38,9 +66,9 @@ export function App() {
 
   useEffect(() => {
     if (doc && graphHost.current) {
-      renderGraph(graphHost.current, buildGraphModel(doc));
+      renderGraph(graphHost.current, buildGraphModel(doc), openDictionary);
     }
-  }, [doc]);
+  }, [doc, openDictionary]);
 
   const changePhrase = (newPhrase: string) => {
     setSentence(newPhrase);
@@ -49,7 +77,7 @@ export function App() {
 
   const resetGraphView = () => {
     if (doc && graphHost.current) {
-      renderGraph(graphHost.current, buildGraphModel(doc));
+      renderGraph(graphHost.current, buildGraphModel(doc), openDictionary);
     }
   };
 
@@ -131,6 +159,14 @@ export function App() {
           </section>
         )}
       </div>
+      {dictionary && (
+        <MobileDictionary
+          selection={dictionary}
+          onSelect={(id) => setDictionary((current) => current ? { ...current, selectedId: id } : null)}
+          onClose={closeDictionary}
+          returnFocus={dictionaryOrigin.current}
+        />
+      )}
     </div>
   );
 }
