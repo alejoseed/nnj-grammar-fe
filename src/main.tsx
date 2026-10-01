@@ -9,6 +9,12 @@ if (!(root instanceof HTMLElement)) {
   throw new Error("missing app host");
 }
 
+if (import.meta.env.DEV) {
+  void import("./dev/svg-source-inspector").then((inspector) =>
+    inspector.installSvgSourceInspector(),
+  );
+}
+
 createRoot(root).render(
   <StrictMode>
     <App />

@@ -3,6 +3,7 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
+import { d3Source } from "./tools/vite/d3-source";
 
 export default defineConfig({
   plugins: [
@@ -18,6 +19,7 @@ export default defineConfig({
         },
       },
     }),
+    d3Source(),
     react(),
     tailwindcss(),
   ],
