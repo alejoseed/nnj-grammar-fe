@@ -20,15 +20,13 @@ type HorizontalExtent = { left: number; right: number };
 
 
 function measuredTextWidth(text: SVGTextElement): number {
-  if (typeof text.getComputedTextLength === "function") {
-    try {
-      const width = text.getComputedTextLength();
-      if (Number.isFinite(width) && width > 0) {
-        return width;
-      }
-    } catch {
-      // jsdom does not implement SVG text measurement.
+  try {
+    const width = text.getComputedTextLength();
+    if (Number.isFinite(width) && width > 0) {
+      return width;
     }
+  } catch {
+    // jsdom does not implement SVG text measurement.
   }
 
   const fontSize = text.classList.contains("graph-secondary-label") ? 10 : 12;
