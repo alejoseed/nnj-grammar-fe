@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fixture from "../../nnj-grammar/tests/fixtures/analysis-soshite.json";
-import { mountFixtureGraph } from "../src/app";
+import { mountFixtureGraph } from "../src/api";
 
 const fixtureUrl = new URL("https://fixture.invalid/analysis.json");
 

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fixture from "../../nnj-grammar/tests/fixtures/analysis-soshite.json";
 import { buildGraphModel } from "../src/graph-model";
 import { renderGraph } from "../src/graph";
-import type { AnalysisDocument } from "../src/types";
+import { AnalysisDocument } from "../src/types";
 
 describe("renderGraph", () => {
   let host: HTMLDivElement;
@@ -13,7 +13,7 @@ describe("renderGraph", () => {
     host = document.createElement("div");
     renderGraph(
       host,
-      buildGraphModel(structuredClone(fixture) as AnalysisDocument),
+      buildGraphModel(AnalysisDocument.parse(fixture)),
     );
   });
 

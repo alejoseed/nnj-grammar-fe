@@ -1,25 +1,29 @@
 import { describe, expect, it } from "vitest";
+import { ZodError } from "zod";
 import fixture from "../../nnj-grammar/tests/fixtures/analysis-soshite.json";
-import { parseAnalysisDocument } from "../src/types";
+import { AnalysisDocument } from "../src/types";
 
-describe("parseAnalysisDocument", () => {
-  it("accepts the committed schema version 3 fixture", () => {
-    expect(parseAnalysisDocument(fixture)).toBe(fixture);
+describe("AnalysisDocument", () => {
+  // Parsing strips keys the schema doesn't know, so equality also catches a
+  // backend field the schema is missing.
+  it("covers every field of the committed schema version 3 fixture", () => {
+    expect(AnalysisDocument.parse(fixture)).toEqual(fixture);
   });
 
-  it("rejects unsupported schema versions", () => {
+  it.each([2, 4])("rejects schema version %i", (schema_version) => {
     expect(() =>
-      parseAnalysisDocument({ ...fixture, schema_version: 2 }),
-    ).toThrow("unsupported analysis schema version: 2");
-    expect(() =>
-      parseAnalysisDocument({ ...fixture, schema_version: 4 }),
-    ).toThrow("unsupported analysis schema version: 4");
+      AnalysisDocument.parse({ ...fixture, schema_version }),
+    ).toThrow(ZodError);
   });
 
-  it.each([null, [], { schema_version: 3 }, { ...fixture, tokens: null }])(
-    "rejects a malformed top-level document: %j",
-    (value) => {
-      expect(() => parseAnalysisDocument(value)).toThrow("invalid analysis document");
-    },
-  );
+  it.each([
+    null,
+    [],
+    { schema_version: 3 },
+    { ...fixture, tokens: null },
+    { ...fixture, tree: { ...fixture.tree, nodes: [{ id: "n", kind: "phrase" }] } },
+    { ...fixture, tokens: [{ ...fixture.tokens[0], position: -1 }] },
+  ])("rejects a malformed document: %j", (value) => {
+    expect(() => AnalysisDocument.parse(value)).toThrow(ZodError);
+  });
 });

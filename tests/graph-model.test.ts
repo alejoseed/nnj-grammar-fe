@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import fixture from "../../nnj-grammar/tests/fixtures/analysis-soshite.json";
-import type { AnalysisDocument } from "../src/types";
+import { AnalysisDocument } from "../src/types";
 import { buildGraphModel, buildOrderedTree } from "../src/graph-model";
 
 // Fixture tree: document-0 → sentence-0 → [bunsetsu-0-0 そして][bunsetsu-0-1 なによりも]
 // Node indices: 0=document-0 1=sentence-0 2=bunsetsu-0-0 3=token-0
 //               4=bunsetsu-0-1 5=token-1 6=token-2 7=token-3
 function documentCopy(): AnalysisDocument {
-  return structuredClone(fixture) as AnalysisDocument;
+  return AnalysisDocument.parse(fixture);
 }
 
 describe("buildOrderedTree", () => {

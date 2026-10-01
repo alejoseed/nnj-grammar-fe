@@ -1,5 +1,5 @@
 import { buildGraphModel, type GraphNode } from "./graph-model";
-import { parseAnalysisDocument } from "./types";
+import { AnalysisDocument } from "./types";
 
 export type GraphRenderer = (host: HTMLElement, model: GraphNode) => void;
 
@@ -10,7 +10,7 @@ export async function loadAnalysisDocument(url: URL) {
   if (!response.ok) {
     throw new Error(`fixture request failed: ${response.status}`);
   }
-  return parseAnalysisDocument(await response.json());
+  return AnalysisDocument.parse(await response.json());
 }
 
 export async function analyzeText(text: string) {
@@ -22,7 +22,7 @@ export async function analyzeText(text: string) {
   if (!response.ok) {
     throw new Error(`analyze request failed: ${response.status}`);
   }
-  return parseAnalysisDocument(await response.json());
+  return AnalysisDocument.parse(await response.json());
 }
 
 function showGraphError(host: HTMLElement): void {
