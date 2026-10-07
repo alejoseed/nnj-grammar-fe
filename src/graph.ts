@@ -1,5 +1,6 @@
 import * as d3 from "d3";
-import type { GraphNode } from "./graph-model";
+import type { GraphNode, RubyRun } from "./graph-model";
+import { layoutRuby, type MeasuredRun } from "./ruby-layout";
 
 const DESKTOP_WIDTH = 1200;
 const DESKTOP_HEIGHT = 800;
@@ -9,6 +10,13 @@ const VERTICAL_NODE_GAP = 52;
 const HORIZONTAL_LABEL_GAP = 32;
 const NODE_TOP = 40;
 const MARGIN = { top: 20, left: 200 };
+const PRIMARY_FONT_PX = 12;
+const RUBY_FONT_PX = 7;
+const HOVER_RADIUS_PX = 10;
+// How far the ruby baseline sits above the label baseline. It is the label's
+// ascent plus the ruby's descent, so the ruby's font box rests on the label's.
+// Chromium's default CJK fallback measures 12.2px and 3.1px at 12px and 7px.
+const RUBY_RISE_PX = 15;
 
 // Palette tokens live in styles.css (@theme). Resting colors are Tailwind
 // classes; emphasis is an inline style so it wins over them while active.
@@ -18,8 +26,57 @@ type PointNode = d3.HierarchyPointNode<GraphNode>;
 type NodeSelection = d3.Selection<SVGGElement, PointNode, d3.BaseType, unknown>;
 type HorizontalExtent = { left: number; right: number };
 
+function labelBaseline(point: PointNode): number {
+  // 35 / 100 rather than 0.35 keeps the attribute "4.2", not 4.199999999999999.
+  return point.children ? -1.5 * PRIMARY_FONT_PX : (35 * PRIMARY_FONT_PX) / 100;
+}
+
+function textFontPx(text: SVGTextElement): number {
+  const attribute = Number(text.getAttribute("font-size"));
+  if (attribute > 0) {
+    return attribute;
+  }
+  const match = /\btext-\[(\d+(?:\.\d+)?)px\]/.exec(
+    text.getAttribute("class") ?? "",
+  );
+  return match ? Number(match[1]) : PRIMARY_FONT_PX;
+}
+
+function estimatedAdvances(label: string, fontPx: number): number[] {
+  return Array.from({ length: label.length }, (_, index) => {
+    const code = label.charCodeAt(index);
+    // A low surrogate is the second half of the character before it.
+    if (code >= 0xdc00 && code <= 0xdfff) {
+      return 0;
+    }
+    const halfwidthKatakana = code >= 0xff61 && code <= 0xff9f;
+    const wide =
+      (code >= 0x3000 && code <= 0x30ff) ||
+      (code >= 0x3400 && code <= 0x9fff) ||
+      (code >= 0xf900 && code <= 0xfaff) ||
+      (code >= 0xff00 && code <= 0xffef && !halfwidthKatakana) ||
+      (code >= 0xd800 && code <= 0xdbff);
+    return wide ? fontPx : fontPx * 0.6;
+  });
+}
+
+function characterAdvances(text: SVGTextElement): number[] {
+  const label = text.textContent ?? "";
+  try {
+    return Array.from({ length: label.length }, (_, index) =>
+      text.getSubStringLength(index, 1),
+    );
+  } catch {
+    // jsdom does not implement SVG text measurement.
+    return estimatedAdvances(label, textFontPx(text));
+  }
+}
 
 function measuredTextWidth(text: SVGTextElement): number {
+  const fixed = Number(text.getAttribute("textLength"));
+  if (fixed > 0) {
+    return fixed;
+  }
   try {
     const width = text.getComputedTextLength();
     if (Number.isFinite(width) && width > 0) {
@@ -29,8 +86,49 @@ function measuredTextWidth(text: SVGTextElement): number {
     // jsdom does not implement SVG text measurement.
   }
 
-  const fontSize = text.classList.contains("graph-secondary-label") ? 10 : 12;
-  return (text.textContent?.length ?? 0) * fontSize * 0.6;
+  return estimatedAdvances(text.textContent ?? "", textFontPx(text)).reduce(
+    (total, advance) => total + advance,
+    0,
+  );
+}
+
+function textLeft(text: SVGTextElement, width: number): number {
+  const x = Number(text.getAttribute("x") ?? 0);
+  const anchor = text.getAttribute("text-anchor");
+  if (anchor === "end") {
+    return x - width;
+  }
+  return anchor === "middle" ? x - width / 2 : x;
+}
+
+export function placeRuby(group: SVGGElement, point: PointNode): void {
+  const primary = group.querySelector<SVGTextElement>("text.graph-primary-label");
+  const measured: Array<MeasuredRun & { element: SVGTextElement }> = [];
+  d3.select(group)
+    .selectAll<SVGTextElement, RubyRun>("text.graph-ruby")
+    .each(function (run) {
+      this.removeAttribute("textLength");
+      this.removeAttribute("lengthAdjust");
+      measured.push({ element: this, run, natural: measuredTextWidth(this) });
+    });
+  if (!primary || measured.length === 0) {
+    return;
+  }
+  const advances = characterAdvances(primary);
+  const labelLeft = textLeft(
+    primary,
+    advances.reduce((total, advance) => total + advance, 0),
+  );
+  const baseline = labelBaseline(point) - RUBY_RISE_PX;
+  const placements = layoutRuby(measured, advances);
+  for (const { element, center, width, compressed } of placements) {
+    element.setAttribute("x", String(labelLeft + center));
+    element.setAttribute("y", String(baseline));
+    if (compressed) {
+      element.setAttribute("textLength", String(width));
+      element.setAttribute("lengthAdjust", "spacingAndGlyphs");
+    }
+  }
 }
 
 function measureDepthExtents(nodes: NodeSelection): Map<number, HorizontalExtent> {
@@ -41,15 +139,10 @@ function measureDepthExtents(nodes: NodeSelection): Map<number, HorizontalExtent
     let right = 10;
 
     for (const text of this.querySelectorAll<SVGTextElement>("text")) {
-      const x = Number(text.getAttribute("x") ?? 0);
       const width = measuredTextWidth(text);
-      if (text.getAttribute("text-anchor") === "end") {
-        left = Math.min(left, x - width);
-        right = Math.max(right, x);
-      } else {
-        left = Math.min(left, x);
-        right = Math.max(right, x + width);
-      }
+      const leftEdge = textLeft(text, width);
+      left = Math.min(left, leftEdge);
+      right = Math.max(right, leftEdge + width);
     }
 
     const extent = extents.get(point.depth);
@@ -100,13 +193,17 @@ function ariaLabel(node: GraphNode): string {
 function applyEmphasis(group: NodeSelection, active: boolean): void {
   group
     .select<SVGCircleElement>("circle")
-    .attr("r", active ? 10 : 6)
+    .attr("r", active ? HOVER_RADIUS_PX : 6)
     .style("fill", active ? EMPHASIS_COLOR : "");
 
   group.selectAll<SVGTextElement, unknown>("text").each(function () {
     this.style.fill = active ? EMPHASIS_COLOR : "";
-    this.style.fontWeight = active ? "bold" : "normal";
   });
+  group
+    .selectAll<SVGTextElement, unknown>("text:not(.graph-ruby)")
+    .each(function () {
+      this.style.fontWeight = active ? "bold" : "normal";
+    });
 }
 
 // Activation returns true only when handled, so desktop keyboard behavior
@@ -200,7 +297,7 @@ export function renderGraph(
         }`,
     )
     .attr("x", (point) => (point.children ? -10 : 10))
-    .attr("dy", (point) => (point.children ? "-1.5em" : ".35em"))
+    .attr("dy", labelBaseline)
     .attr("text-anchor", (point) => (point.children ? "end" : "start"))
     .text((point) => point.data.primaryLabel);
 
@@ -215,6 +312,23 @@ export function renderGraph(
     .attr("dy", (point) => (point.children ? "-.5em" : "1.5em"))
     .attr("text-anchor", (point) => (point.children ? "end" : "start"))
     .text((point) => `(${point.data.secondaryLabel})`);
+
+  node
+    .selectAll<SVGTextElement, RubyRun>("text.graph-ruby")
+    .data((point) => point.data.ruby)
+    .join("text")
+    // A size class built from RUBY_FONT_PX is invisible to Tailwind's source
+    // scan, so the size is an attribute.
+    .attr("class", "graph-ruby fill-fog transition-all duration-200")
+    .attr("font-size", RUBY_FONT_PX)
+    .attr("text-anchor", "middle")
+    .attr("aria-hidden", "true")
+    .attr("data-ruby-start", (run) => run.start)
+    .attr("data-ruby-length", (run) => run.length)
+    .text((run) => run.reading);
+  node.each(function (point) {
+    placeRuby(this, point);
+  });
 
   depthColumns = placeDepthColumns(measureDepthExtents(node), root.height);
   node.attr(
