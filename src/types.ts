@@ -6,6 +6,13 @@ import { z } from "zod";
 
 const index = z.int().nonnegative();
 
+export const FuriganaSegment = z.object({
+  text: z.string(),
+  reading: z.string().nullable(),
+});
+
+export type FuriganaSegment = z.infer<typeof FuriganaSegment>;
+
 export const DictionaryGloss = z.object({
   entry_seq: z.int(),
   gloss: z.string(),
@@ -25,6 +32,7 @@ export const AnalyzedToken = z.object({
   conj_form: z.string(),
   base_form: z.string(),
   reading: z.string(),
+  furigana: z.array(FuriganaSegment).optional(),
   byte_start: index,
   byte_end: index,
   position: index,
