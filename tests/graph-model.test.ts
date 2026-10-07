@@ -1,13 +1,31 @@
 import { describe, expect, it } from "vitest";
 import fixture from "../../nnj-grammar/tests/fixtures/analysis-soshite.json";
+import hanbaiki from "../../nnj-grammar/tests/fixtures/analysis-hanbaiki.json";
 import { AnalysisDocument } from "../src/types";
-import { buildGraphModel, buildOrderedTree } from "../src/graph-model";
+import {
+  buildGraphModel,
+  buildOrderedTree,
+  type GraphNode,
+} from "../src/graph-model";
 
 // Fixture tree: document-0 → sentence-0 → [bunsetsu-0-0 そして][bunsetsu-0-1 なによりも]
 // Node indices: 0=document-0 1=sentence-0 2=bunsetsu-0-0 3=token-0
 //               4=bunsetsu-0-1 5=token-1 6=token-2 7=token-3
 function documentCopy(): AnalysisDocument {
   return AnalysisDocument.parse(fixture);
+}
+
+function byId(root: GraphNode, id: string): GraphNode | undefined {
+  if (root.id === id) {
+    return root;
+  }
+  for (const child of root.children) {
+    const found = byId(child, id);
+    if (found) {
+      return found;
+    }
+  }
+  return undefined;
 }
 
 describe("buildOrderedTree", () => {
@@ -97,20 +115,32 @@ describe("buildGraphModel", () => {
     ).toEqual(["なに", "より", "も"]);
   });
 
-  it("uses a gloss before a non-redundant reading", () => {
+  it("uses a gloss before a reading the ruby does not already show", () => {
     const withGloss = documentCopy();
     withGloss.tokens[1]!.surface = "何";
+    withGloss.tokens[1]!.furigana = [{ text: "何", reading: "なに" }];
     withGloss.tokens[1]!.glosses = [
       { entry_seq: 1, gloss: "what", pos: ["pronoun"] },
     ];
-    expect(
-      buildGraphModel(withGloss).children[1]?.children[0]?.secondaryLabel,
-    ).toBe("what");
+    expect(buildGraphModel(withGloss).children[1]?.children[0]).toMatchObject({
+      primaryLabel: "何",
+      ruby: [{ start: 0, length: 1, reading: "なに" }],
+      secondaryLabel: "what",
+    });
 
     withGloss.tokens[1]!.glosses = [];
-    expect(
-      buildGraphModel(withGloss).children[1]?.children[0]?.secondaryLabel,
-    ).toBe("なに");
+    expect(buildGraphModel(withGloss).children[1]?.children[0]).toMatchObject({
+      primaryLabel: "何",
+      ruby: [{ start: 0, length: 1, reading: "なに" }],
+      secondaryLabel: "",
+    });
+
+    delete withGloss.tokens[1]!.furigana;
+    expect(buildGraphModel(withGloss).children[1]?.children[0]).toMatchObject({
+      primaryLabel: "何",
+      ruby: [],
+      secondaryLabel: "なに",
+    });
   });
 
   it("does not repeat a reading identical to the surface", () => {
@@ -156,8 +186,88 @@ describe("buildGraphModel", () => {
     expect(root.children[2]).toMatchObject({
       kind: "relation",
       primaryLabel: "何より",
+      ruby: [],
       secondaryLabel: "Above all else, more than anything",
       children: [],
+    });
+  });
+
+  it("builds ruby runs from token furigana", () => {
+    const root = buildGraphModel(AnalysisDocument.parse(hanbaiki));
+    const compound = [
+      { start: 0, length: 2, reading: "じどう" },
+      { start: 2, length: 2, reading: "はんばい" },
+      { start: 4, length: 1, reading: "き" },
+    ];
+    expect(byId(root, "bunsetsu-0-0")).toMatchObject({
+      primaryLabel: "自動販売機で",
+      ruby: compound,
+    });
+    expect(byId(root, "word-0-2")).toMatchObject({
+      primaryLabel: "自動販売機",
+      ruby: compound,
+    });
+    expect(byId(root, "token-3")).toMatchObject({ primaryLabel: "で", ruby: [] });
+    expect(byId(root, "bunsetsu-0-1")).toMatchObject({
+      primaryLabel: "水を",
+      ruby: [{ start: 0, length: 1, reading: "みず" }],
+    });
+    expect(byId(root, "token-4")).toMatchObject({
+      primaryLabel: "水",
+      ruby: [{ start: 0, length: 1, reading: "みず" }],
+    });
+    expect(byId(root, "bunsetsu-0-2")).toMatchObject({
+      primaryLabel: "買った",
+      ruby: [{ start: 0, length: 1, reading: "か" }],
+    });
+    expect(byId(root, "token-6")).toMatchObject({
+      primaryLabel: "買っ",
+      ruby: [{ start: 0, length: 1, reading: "か" }],
+    });
+    expect(byId(root, "token-7")).toMatchObject({ primaryLabel: "た", ruby: [] });
+  });
+
+  it("renders a document from a backend that predates furigana without ruby", () => {
+    const legacy = AnalysisDocument.parse(hanbaiki);
+    for (const token of legacy.tokens) {
+      delete token.furigana;
+    }
+    const root = buildGraphModel(legacy);
+    expect(byId(root, "bunsetsu-0-0")).toMatchObject({
+      primaryLabel: "自動販売機で",
+      ruby: [],
+    });
+    expect(byId(root, "token-6")).toMatchObject({
+      primaryLabel: "買っ",
+      ruby: [],
+    });
+  });
+
+  it("renders a token plain when its furigana does not spell it", () => {
+    const document = AnalysisDocument.parse(hanbaiki);
+    document.tokens[0]!.furigana = [{ text: "自", reading: "じ" }];
+    const root = buildGraphModel(document);
+    expect(byId(root, "word-0-2")).toMatchObject({
+      primaryLabel: "自動販売機",
+      ruby: [
+        { start: 2, length: 2, reading: "はんばい" },
+        { start: 4, length: 1, reading: "き" },
+      ],
+    });
+  });
+
+  it("renders a token plain when its furigana list is empty", () => {
+    const document = AnalysisDocument.parse(hanbaiki);
+    document.tokens[4]!.furigana = [];
+    const root = buildGraphModel(document);
+    expect(byId(root, "token-4")).toMatchObject({ primaryLabel: "水", ruby: [] });
+    expect(byId(root, "bunsetsu-0-1")).toMatchObject({
+      primaryLabel: "水を",
+      ruby: [],
+    });
+    expect(byId(root, "token-6")).toMatchObject({
+      primaryLabel: "買っ",
+      ruby: [{ start: 0, length: 1, reading: "か" }],
     });
   });
 

@@ -11,6 +11,12 @@ export interface OrderedTreeNode {
   children: OrderedTreeNode[];
 }
 
+export interface RubyRun {
+  start: number;
+  length: number;
+  reading: string;
+}
+
 export interface GraphNode {
   id: string;
   /**
@@ -20,6 +26,7 @@ export interface GraphNode {
    */
   kind: TreeNodeKind | "relation";
   primaryLabel: string;
+  ruby: RubyRun[];
   secondaryLabel: string;
   children: GraphNode[];
 }
@@ -132,6 +139,31 @@ function spanTokens(
   return tokens;
 }
 
+function labelFromTokens(
+  tokens: AnalyzedToken[],
+): Pick<GraphNode, "primaryLabel" | "ruby"> {
+  let primaryLabel = "";
+  const ruby: RubyRun[] = [];
+  for (const token of tokens) {
+    const furigana = token.furigana ?? [];
+    const segments =
+      furigana.map((segment) => segment.text).join("") === token.surface
+        ? furigana
+        : [{ text: token.surface, reading: null }];
+    for (const segment of segments) {
+      if (segment.reading !== null) {
+        ruby.push({
+          start: primaryLabel.length,
+          length: segment.text.length,
+          reading: segment.reading,
+        });
+      }
+      primaryLabel += segment.text;
+    }
+  }
+  return { primaryLabel, ruby };
+}
+
 export function buildGraphModel(document: AnalysisDocument): GraphNode {
   const ordered = buildOrderedTree(document.tree);
   if (ordered.node.kind !== "document") {
@@ -183,11 +215,12 @@ export function buildGraphModel(document: AnalysisDocument): GraphNode {
     });
 
     let primaryLabel = "";
+    let ruby: RubyRun[] = [];
     let secondaryLabel = "";
     if (node.kind === "bunsetsu") {
-      primaryLabel = spanTokens(node, tokensByPosition)
-        .map((token) => token.surface)
-        .join("");
+      ({ primaryLabel, ruby } = labelFromTokens(
+        spanTokens(node, tokensByPosition),
+      ));
       secondaryLabel = attached
         .map((matched) => matched.meaning_en.trim())
         .find((meaning) => meaning !== "") ?? "";
@@ -195,7 +228,7 @@ export function buildGraphModel(document: AnalysisDocument): GraphNode {
       // One dictionary word split into short units: label with the joined
       // surface and the compound gloss (prepended to every covered token).
       const pieces = spanTokens(node, tokensByPosition);
-      primaryLabel = pieces.map((token) => token.surface).join("");
+      ({ primaryLabel, ruby } = labelFromTokens(pieces));
       secondaryLabel =
         pieces[0]?.glosses.find((gloss) => gloss.gloss.trim())?.gloss.trim() ?? "";
     } else if (node.kind === "token") {
@@ -206,10 +239,12 @@ export function buildGraphModel(document: AnalysisDocument): GraphNode {
       if (node.token_start !== token.position || node.token_end !== token.position) {
         throw new Error(`tree and token positions differ: ${token.id}`);
       }
-      primaryLabel = token.surface;
+      ({ primaryLabel, ruby } = labelFromTokens([token]));
+      // Ruby already shows the reading. Without ruby the lemma reading still
+      // helps: the kana token し gets (する).
       secondaryLabel =
         token.glosses.find((gloss) => gloss.gloss.trim())?.gloss.trim() ??
-        (token.reading !== token.surface ? token.reading : "");
+        (ruby.length === 0 && token.reading !== token.surface ? token.reading : "");
     }
 
     const converted = children.map(convert);
@@ -233,6 +268,7 @@ export function buildGraphModel(document: AnalysisDocument): GraphNode {
           id: `relation-${matched.id}`,
           kind: "relation",
           primaryLabel: matched.rule_name,
+          ruby: [],
           secondaryLabel: matched.meaning_en.trim(),
           children: [],
         });
@@ -243,6 +279,7 @@ export function buildGraphModel(document: AnalysisDocument): GraphNode {
       id: node.id,
       kind: node.kind,
       primaryLabel,
+      ruby,
       secondaryLabel,
       children: converted,
     };
