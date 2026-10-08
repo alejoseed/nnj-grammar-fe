@@ -184,10 +184,20 @@ interface MeasuredRuby {
   fontStyle: string;
 }
 
+/** The union of an internal node's text boxes, in the node's own units. */
+interface HangingBlock {
+  nodeId: string;
+  side: string;
+  nudges: number;
+  top: number;
+  bottom: number;
+}
+
 interface GraphMeasurement {
   texts: PlacedText[];
   rubies: MeasuredRuby[];
   links: PlacedLink[];
+  blocks: HangingBlock[];
 }
 
 /** Runs in the page, so it may not reference anything outside its body. */
@@ -256,6 +266,18 @@ function measureGraph(): GraphMeasurement {
       const start = path.getPointAtLength(0).matrixTransform(matrix);
       const end = path.getPointAtLength(length).matrixTransform(matrix);
       return { source: nodeAt(start), target: nodeAt(end), points };
+    }),
+    blocks: [
+      ...document.querySelectorAll<SVGGElement>("svg[role=tree] g.graph-node[data-label-side]"),
+    ].map((group) => {
+      const boxes = [...group.querySelectorAll<SVGTextElement>("text")].map((text) => text.getBBox());
+      return {
+        nodeId: group.id.replace(/^graph-node-/, ""),
+        side: group.dataset.labelSide ?? "",
+        nudges: Number(group.dataset.labelNudges),
+        top: Math.min(...boxes.map((box) => box.y)),
+        bottom: Math.max(...boxes.map((box) => box.y + box.height)),
+      };
     }),
     rubies: texts.flatMap((ruby, textIndex) => {
       if (!ruby.classList.contains("graph-ruby")) {
@@ -559,7 +581,37 @@ function inside(box: Box, point: { x: number; y: number }): boolean {
 }
 
 function checkLinksAndRows(sentence: Sentence, measurement: GraphMeasurement): void {
-  const { links, texts } = measurement;
+  const { links, texts, blocks } = measurement;
+  for (const block of blocks) {
+    if (block.side !== "below") {
+      continue;
+    }
+    expectAtMost(
+      "G11 a label hung below sits by its circle",
+      {
+        where: `sentence ${sentence.number} ${sentence.text}, label of ${block.nodeId}`,
+        numbers: `block ${px(block.top)}..${px(block.bottom)} in node units, ${block.nudges} nudges`,
+      },
+      block.top,
+      7.5 + 12 * block.nudges,
+    );
+  }
+  for (const link of links) {
+    for (const text of texts) {
+      if (text.nodeId === link.source || text.nodeId === link.target) {
+        continue;
+      }
+      expectAtMost(
+        "G12 link clear of other nodes' labels",
+        {
+          where: `sentence ${sentence.number} ${sentence.text}, link ${link.source}->${link.target}, ${text.role} "${text.content}" of ${text.nodeId}`,
+          numbers: `line boxes ${text.lines.map(boxText).join(" | ")}`,
+        },
+        link.points.filter((point) => text.lines.some((line) => inside(line, point))).length,
+        0,
+      );
+    }
+  }
   for (const link of links) {
     for (const text of texts) {
       if (text.nodeId !== link.source && text.nodeId !== link.target) {
