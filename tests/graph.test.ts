@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fixture from "../../nnj-grammar/tests/fixtures/analysis-soshite.json";
 import hanbaiki from "../../nnj-grammar/tests/fixtures/analysis-hanbaiki.json";
 import { buildGraphModel, type GraphNode, type RubyRun } from "../src/graph-model";
-import { placeRuby, renderGraph } from "../src/graph";
+import { placeRuby, renderGraph, sampleLink } from "../src/graph";
 import { AnalysisDocument } from "../src/types";
 
 describe("renderGraph", () => {
@@ -45,7 +45,7 @@ describe("renderGraph", () => {
       "#graph-node-bunsetsu-0-1 .graph-primary-label",
     );
     expect(internalLabel?.getAttribute("x")).toBe("-10");
-    expect(internalLabel?.getAttribute("dy")).toBe("32");
+    expect(internalLabel?.getAttribute("dy")).toBe("14.5");
     expect(internalLabel?.getAttribute("text-anchor")).toBe("end");
     const leafLabel = host.querySelector(
       "#graph-node-token-1 .graph-primary-label",
@@ -404,7 +404,29 @@ describe("renderGraph gloss wrapping", () => {
   });
 });
 
-describe("renderGraph label side", () => {
+describe("sampleLink", () => {
+  it("follows d3.linkHorizontal's cubic from end to end", () => {
+    expect(sampleLink({ x: 0, y: 0 }, { x: 100, y: 52 }, 39)).toEqual([
+      { x: 0, y: 0 },
+      { x: 29.6875, y: 8.125 },
+      { x: 50, y: 26 },
+      { x: 70.3125, y: 43.875 },
+      { x: 100, y: 52 },
+    ]);
+  });
+
+  it("keeps samples at most a step apart on a steep link", () => {
+    const samples = sampleLink({ x: 0, y: 222 }, { x: 208, y: 66 }, 2);
+    const gaps = samples.slice(1).map((sample, index) =>
+      Math.hypot(sample.x - samples[index]!.x, sample.y - samples[index]!.y),
+    );
+    expect(samples).toHaveLength(235);
+    expect(samples.at(-1)).toEqual({ x: 208, y: 66 });
+    expect(Math.max(...gaps)).toBeLessThanOrEqual(2);
+  });
+});
+
+describe("renderGraph label placement", () => {
   const ruby: RubyRun[] = [{ start: 0, length: 1, reading: "い" }];
   const token = (id: string): GraphNode => ({
     id,
@@ -446,8 +468,10 @@ describe("renderGraph label side", () => {
     Number(
       /,([-\d.]+)\)$/.exec(host.querySelector(`#graph-node-${id}`)?.getAttribute("transform") ?? "")?.[1],
     );
+  const fallbacks = (host: HTMLElement) =>
+    host.querySelector("svg")?.getAttribute("data-label-fallbacks");
 
-  it("hangs a last child's label below its circle and keeps a first child's above", () => {
+  it("hangs a last child's label just under its center line and keeps a first child's above", () => {
     const host = render(
       scaffold("document-0", "document", [
         bunsetsu("bunsetsu-0-0", "Will/Does/Do (not)", 1),
@@ -457,37 +481,112 @@ describe("renderGraph label side", () => {
 
     expect(block(host, "bunsetsu-0-0")).toEqual({ primary: "-18", gloss: ["-5"], ruby: ["-33"] });
     expect(block(host, "bunsetsu-0-1")).toEqual({
-      primary: "32",
-      gloss: ["45", "57"],
-      ruby: ["17"],
+      primary: "24.5",
+      gloss: ["37.5", "49.5"],
+      ruby: ["9.5"],
     });
     expect(["bunsetsu-0-0", "document-0", "bunsetsu-0-1"].map((id) => rowOf(host, id))).toEqual([
       40, 92, 144,
     ]);
+    expect(fallbacks(host)).toBe("0");
   });
 
-  it("hangs a middle child's label below only when its parent lands above it", () => {
-    const lopsided = render(
+  it("keeps a middle child above when the link to the last child crosses below, though its parent sits above it", () => {
+    const host = render(
       scaffold("document-0", "document", [
         bunsetsu("bunsetsu-0-0", "", 2),
         bunsetsu("bunsetsu-0-1", "", 1),
         bunsetsu("bunsetsu-0-2", "", 1),
       ]),
     );
-    expect(["document-0", "bunsetsu-0-1"].map((id) => rowOf(lopsided, id))).toEqual([
-      183, 196,
-    ]);
-    expect(block(lopsided, "bunsetsu-0-1").primary).toBe("32");
 
-    const level = render(
+    expect(["document-0", "bunsetsu-0-1", "bunsetsu-0-2"].map((id) => rowOf(host, id))).toEqual([
+      183, 196, 300,
+    ]);
+    expect(block(host, "bunsetsu-0-1")).toEqual({ primary: "-18", gloss: [], ruby: ["-33"] });
+    expect(block(host, "bunsetsu-0-2").primary).toBe("24.5");
+  });
+
+  it("hangs a middle child one step below when the link to the first child crosses above and its own link grazes below", () => {
+    const host = render(
       scaffold("document-0", "document", [
-        bunsetsu("bunsetsu-0-0", "", 2),
+        bunsetsu("bunsetsu-0-0", "", 1),
         bunsetsu("bunsetsu-0-1", "", 1),
         bunsetsu("bunsetsu-0-2", "", 2),
       ]),
     );
-    expect(["document-0", "bunsetsu-0-1"].map((id) => rowOf(level, id))).toEqual([196, 196]);
-    expect(block(level, "bunsetsu-0-1").primary).toBe("-18");
+
+    expect(["bunsetsu-0-0", "bunsetsu-0-1", "document-0"].map((id) => rowOf(host, id))).toEqual([
+      40, 144, 157,
+    ]);
+    expect(block(host, "bunsetsu-0-1")).toEqual({ primary: "36.5", gloss: [], ruby: ["21.5"] });
+    expect(fallbacks(host)).toBe("0");
+  });
+
+  it("keeps the first pass's spot and counts the fallback when the second pass finds none free", () => {
+    const narrow = render(
+      scaffold("document-0", "document", [
+        bunsetsu("bunsetsu-0-0", "", 1),
+        bunsetsu("bunsetsu-0-1", "", 1),
+        bunsetsu("bunsetsu-0-2", "", 1),
+      ]),
+    );
+    expect(block(narrow, "bunsetsu-0-1").primary).toBe("24.5");
+    expect(fallbacks(narrow)).toBe("0");
+
+    const wide = render(
+      scaffold("document-0", "document", [
+        bunsetsu("bunsetsu-0-0", "", 1),
+        { ...bunsetsu("bunsetsu-0-1", "please do not go there", 1), primaryLabel: "行かないでください" },
+        bunsetsu("bunsetsu-0-2", "", 1),
+      ]),
+    );
+    expect(block(wide, "bunsetsu-0-1")).toEqual({ primary: "24.5", gloss: ["37.5"], ruby: ["9.5"] });
+    expect(fallbacks(wide)).toBe("1");
+  });
+
+  it("records each hanging label's side and nudges on its node", () => {
+    const host = render(
+      scaffold("document-0", "document", [
+        bunsetsu("bunsetsu-0-0", "", 1),
+        bunsetsu("bunsetsu-0-1", "", 1),
+        bunsetsu("bunsetsu-0-2", "", 2),
+      ]),
+    );
+    const placement = (id: string) => {
+      const group = host.querySelector(`#graph-node-${id}`);
+      return [group?.getAttribute("data-label-side"), group?.getAttribute("data-label-nudges")];
+    };
+
+    expect(placement("bunsetsu-0-0")).toEqual(["above", "0"]);
+    expect(placement("bunsetsu-0-1")).toEqual(["below", "1"]);
+    expect(placement("bunsetsu-0-2-token-0")).toEqual([null, null]);
+  });
+
+  it("drops a below label until a ruby overhanging its end clears the hover circle", () => {
+    const hon: RubyRun[] = [{ start: 0, length: 1, reading: "ほん" }];
+    const host = render(
+      scaffold("document-0", "document", [
+        bunsetsu("bunsetsu-0-0", "", 1),
+        {
+          id: "bunsetsu-0-1",
+          kind: "bunsetsu",
+          primaryLabel: "本",
+          ruby: hon,
+          secondaryLabel: "book",
+          children: [{ ...token("token-1"), primaryLabel: "本", ruby: hon }],
+        },
+      ]),
+    );
+
+    // ほん is estimated 14 wide over a 12 wide 本 ending at -10, so its corner
+    // sits at x = -9 and must drop to y = sqrt(10² - 9²).
+    expect(rubyAttributes(host, "bunsetsu-0-1", "x")).toEqual(["-16"]);
+    expect(block(host, "bunsetsu-0-1")).toEqual({
+      primary: "26.358898943540673",
+      gloss: ["39.35889894354067"],
+      ruby: ["11.358898943540673"],
+    });
   });
 
   it("parts a label hung below from the next cousin's label above by both blocks", () => {
@@ -504,8 +603,39 @@ describe("renderGraph label side", () => {
       ]),
     );
 
-    expect(block(host, "bunsetsu-0-1").primary).toBe("32");
+    expect(block(host, "bunsetsu-0-1").primary).toBe("24.5");
     expect(block(host, "bunsetsu-1-0").primary).toBe("-18");
-    expect(rowOf(host, "bunsetsu-1-0") - rowOf(host, "bunsetsu-0-1")).toBe(141.5);
+    expect(rowOf(host, "bunsetsu-1-0") - rowOf(host, "bunsetsu-0-1")).toBe(134);
+  });
+
+  it("lays out the hanbaiki fixture", () => {
+    const host = render(buildGraphModel(AnalysisDocument.parse(hanbaiki)));
+    const placed = [...host.querySelectorAll("g.graph-node")].map((group) => [
+      group.id.replace("graph-node-", ""),
+      group.getAttribute("transform"),
+      group.querySelector(".graph-primary-label")?.getAttribute("dy") ?? null,
+      group.querySelector(".graph-secondary-label tspan")?.getAttribute("y") ?? null,
+    ]);
+
+    expect(placed).toEqual([
+      ["document-0", "translate(0,222)", null, null],
+      ["bunsetsu-0-0", "translate(208,66)", "-42", "-29"],
+      ["bunsetsu-0-1", "translate(208,222)", "-30", "-17"],
+      ["bunsetsu-0-2", "translate(208,378)", "-18", null],
+      ["word-0-2", "translate(260,40)", "4.2", "15"],
+      ["token-3", "translate(260,92)", "4.2", "15"],
+      ["token-4", "translate(260,196)", "4.2", "15"],
+      ["token-5", "translate(260,248)", "4.2", "15"],
+      ["token-6", "translate(260,352)", "4.2", "15"],
+      ["token-7", "translate(260,404)", "4.2", "15"],
+    ]);
+    expect(
+      [...host.querySelectorAll("path.graph-link")].slice(0, 3).map((path) => path.getAttribute("d")),
+    ).toEqual([
+      "M0,222C104,222,104,66,208,66",
+      "M0,222C104,222,104,222,208,222",
+      "M0,222C104,222,104,378,208,378",
+    ]);
+    expect(fallbacks(host)).toBe("0");
   });
 });
