@@ -6,6 +6,11 @@ import { z } from "zod";
 
 const index = z.int().nonnegative();
 
+/**
+ * One piece of a token's surface. A kanji run carries the hiragana read over it;
+ * kana, digits, Latin, and symbols carry null. A token whose reading cannot be
+ * placed over its kanji in exactly one way is one segment with a null reading.
+ */
 export const FuriganaSegment = z.object({
   text: z.string(),
   reading: z.string().nullable(),
@@ -32,6 +37,11 @@ export const AnalyzedToken = z.object({
   conj_form: z.string(),
   base_form: z.string(),
   reading: z.string(),
+  /**
+   * The surface as furigana. Joined `text`s spell `surface`. Unlike `reading`
+   * (the lemma's), this follows the inflected surface: 行か → 行(い)か.
+   * Optional within schema version 3 because backends before furigana omit it.
+   */
   furigana: z.array(FuriganaSegment).optional(),
   byte_start: index,
   byte_end: index,

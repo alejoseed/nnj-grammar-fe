@@ -284,7 +284,13 @@ export function renderGraph(
     )
     .attr("r", 6)
     .attr("stroke-width", 1);
-
+    
+  // node
+  //   .filter((point) => point.data.primaryLabel !== "")
+  //   .append("text")
+  //   .attr("x", (point) => (point.children ? - : 10))
+  //   .attr("dy", (point) => (point.children ? "-5.5em" : "2.70em"))
+  //   .text("TEST-101")
   node
     .filter((point) => point.data.primaryLabel !== "")
     .append("text")
