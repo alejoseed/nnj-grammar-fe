@@ -1,4 +1,5 @@
 import * as d3 from "d3";
+import { wrapGloss } from "./gloss-lines";
 import type { GraphNode, RubyRun } from "./graph-model";
 import { layoutRuby, type MeasuredRun } from "./ruby-layout";
 
@@ -11,6 +12,8 @@ const HORIZONTAL_LABEL_GAP = 32;
 const NODE_TOP = 40;
 const MARGIN = { top: 20, left: 200 };
 const PRIMARY_FONT_PX = 12;
+// 1.2em of the gloss font.
+const GLOSS_LINE_PX = 12;
 const RUBY_FONT_PX = 7;
 const HOVER_RADIUS_PX = 10;
 // How far the ruby baseline sits above the label baseline. It is the label's
@@ -26,12 +29,16 @@ type PointNode = d3.HierarchyPointNode<GraphNode>;
 type NodeSelection = d3.Selection<SVGGElement, PointNode, d3.BaseType, unknown>;
 type HorizontalExtent = { left: number; right: number };
 
-function labelBaseline(point: PointNode): number {
+// An internal label sits above its circle, so extra gloss lines lift the
+// whole block instead of growing down into the circle and its links.
+function labelBaseline(point: PointNode, extraGlossLines: number): number {
   // 35 / 100 rather than 0.35 keeps the attribute "4.2", not 4.199999999999999.
-  return point.children ? -1.5 * PRIMARY_FONT_PX : (35 * PRIMARY_FONT_PX) / 100;
+  return point.children
+    ? -1.5 * PRIMARY_FONT_PX - GLOSS_LINE_PX * extraGlossLines
+    : (35 * PRIMARY_FONT_PX) / 100;
 }
 
-function textFontPx(text: SVGTextElement): number {
+function textFontPx(text: SVGTextContentElement): number {
   const attribute = Number(text.getAttribute("font-size"));
   if (attribute > 0) {
     return attribute;
@@ -72,7 +79,10 @@ function characterAdvances(text: SVGTextElement): number[] {
   }
 }
 
-function measuredTextWidth(text: SVGTextElement): number {
+function measuredTextWidth(
+  text: SVGTextContentElement,
+  fontPx = textFontPx(text),
+): number {
   const fixed = Number(text.getAttribute("textLength"));
   if (fixed > 0) {
     return fixed;
@@ -86,10 +96,19 @@ function measuredTextWidth(text: SVGTextElement): number {
     // jsdom does not implement SVG text measurement.
   }
 
-  return estimatedAdvances(text.textContent ?? "", textFontPx(text)).reduce(
+  return estimatedAdvances(text.textContent ?? "", fontPx).reduce(
     (total, advance) => total + advance,
     0,
   );
+}
+
+function widestLineWidth(text: SVGTextElement): number {
+  const lines = text.querySelectorAll<SVGTSpanElement>("tspan");
+  if (lines.length === 0) {
+    return measuredTextWidth(text);
+  }
+  const fontPx = textFontPx(text);
+  return Math.max(...Array.from(lines, (line) => measuredTextWidth(line, fontPx)));
 }
 
 function textLeft(text: SVGTextElement, width: number): number {
@@ -119,7 +138,11 @@ export function placeRuby(group: SVGGElement, point: PointNode): void {
     primary,
     advances.reduce((total, advance) => total + advance, 0),
   );
-  const baseline = labelBaseline(point) - RUBY_RISE_PX;
+  const baseline =
+    labelBaseline(
+      point,
+      Math.max(0, group.querySelectorAll("text.graph-secondary-label tspan").length - 1),
+    ) - RUBY_RISE_PX;
   const placements = layoutRuby(measured, advances);
   for (const { element, center, width, compressed } of placements) {
     element.setAttribute("x", String(labelLeft + center));
@@ -139,7 +162,7 @@ function measureDepthExtents(nodes: NodeSelection): Map<number, HorizontalExtent
     let right = 10;
 
     for (const text of this.querySelectorAll<SVGTextElement>("text")) {
-      const width = measuredTextWidth(text);
+      const width = widestLineWidth(text);
       const leftEdge = textLeft(text, width);
       left = Math.min(left, leftEdge);
       right = Math.max(right, leftEdge + width);
@@ -215,10 +238,26 @@ export function renderGraph(
 ): void {
   host.replaceChildren();
 
+  const hierarchy = d3.hierarchy(model, (node) => node.children);
+  const glossLines = new Map<GraphNode, string[]>();
+  hierarchy.each((point) => {
+    glossLines.set(point.data, wrapGloss(point.data.secondaryLabel));
+  });
+  const linesOf = (node: GraphNode): string[] => glossLines.get(node) ?? [];
+  const extraLines = (node: GraphNode): number => Math.max(0, linesOf(node).length - 1);
+  // A node is VERTICAL_NODE_GAP tall plus one gloss line per extra line; two
+  // neighbors sit their half heights apart, on top of d3's gap between cousins.
   const layout = d3
     .tree<GraphNode>()
-    .nodeSize([VERTICAL_NODE_GAP, 1]);
-  const root = layout(d3.hierarchy(model, (node) => node.children));
+    .nodeSize([VERTICAL_NODE_GAP, 1])
+    .separation(
+      (a, b) =>
+        (a.parent === b.parent ? 1 : 2) +
+        (GLOSS_LINE_PX * (extraLines(a.data) + extraLines(b.data))) /
+          2 /
+          VERTICAL_NODE_GAP,
+    );
+  const root = layout(hierarchy);
   const points = root.descendants();
   const minimumVerticalPosition = d3.min(points, (point) => point.x) ?? 0;
   const verticalOffset = NODE_TOP - minimumVerticalPosition;
@@ -297,21 +336,34 @@ export function renderGraph(
         }`,
     )
     .attr("x", (point) => (point.children ? -10 : 10))
-    .attr("dy", labelBaseline)
+    .attr("dy", (point) => labelBaseline(point, extraLines(point.data)))
     .attr("text-anchor", (point) => (point.children ? "end" : "start"))
     .text((point) => point.data.primaryLabel);
 
   node
-    .filter((point) => point.data.secondaryLabel !== "")
+    .filter((point) => linesOf(point.data).length > 0)
     .append("text")
     .attr(
       "class",
       "graph-secondary-label fill-fog text-[10px] italic transition-all duration-200",
     )
     .attr("x", (point) => (point.children ? -10 : 10))
-    .attr("dy", (point) => (point.children ? "-.5em" : "1.5em"))
+    .attr("y", (point) =>
+      point.children && extraLines(point.data) > 0
+        ? -GLOSS_LINE_PX * extraLines(point.data)
+        : null,
+    )
     .attr("text-anchor", (point) => (point.children ? "end" : "start"))
-    .text((point) => `(${point.data.secondaryLabel})`);
+    .each(function (point) {
+      const lines = linesOf(point.data);
+      lines.forEach((line, index) => {
+        d3.select(this)
+          .append("tspan")
+          .attr("x", point.children ? -10 : 10)
+          .attr("dy", index > 0 ? "1.2em" : point.children ? "-.5em" : "1.5em")
+          .text(`${index === 0 ? "(" : ""}${line}${index === lines.length - 1 ? ")" : ""}`);
+      });
+    });
 
   node
     .selectAll<SVGTextElement, RubyRun>("text.graph-ruby")

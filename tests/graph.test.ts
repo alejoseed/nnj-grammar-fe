@@ -35,13 +35,17 @@ describe("renderGraph", () => {
     // The lone sentence scaffold is hoisted away entirely.
     expect(host.querySelector("#graph-node-sentence-0")).toBeNull();
     expect(host.textContent).toContain("なによりも");
-    expect(host.textContent).toContain("(Above all else, more than anything)");
+    expect(
+      [...host.querySelectorAll("#graph-node-bunsetsu-0-1 .graph-secondary-label tspan")].map(
+        (line) => line.textContent,
+      ),
+    ).toEqual(["(Above all else,", "more than anything)"]);
 
     const internalLabel = host.querySelector(
       "#graph-node-bunsetsu-0-1 .graph-primary-label",
     );
     expect(internalLabel?.getAttribute("x")).toBe("-10");
-    expect(internalLabel?.getAttribute("dy")).toBe("-18");
+    expect(internalLabel?.getAttribute("dy")).toBe("-30");
     expect(internalLabel?.getAttribute("text-anchor")).toBe("end");
     const leafLabel = host.querySelector(
       "#graph-node-token-1 .graph-primary-label",
@@ -55,7 +59,9 @@ describe("renderGraph", () => {
     const node = host.querySelector("#graph-node-bunsetsu-0-1");
     expect(node?.getAttribute("role")).toBe("treeitem");
     expect(node?.getAttribute("tabindex")).toBe("0");
-    expect(node?.getAttribute("aria-label")).toContain("なによりも");
+    expect(node?.getAttribute("aria-label")).toBe(
+      "なによりも (Above all else, more than anything)",
+    );
     expect(
       node?.querySelector("circle")?.classList.contains("fill-washi"),
     ).toBe(true);
@@ -171,7 +177,7 @@ describe("renderGraph furigana", () => {
 
   it("places ruby over right-aligned internal labels", () => {
     expect(rubyAttributes(host, "bunsetsu-0-0", "x")).toEqual(["-70", "-46", "-28"]);
-    expect(rubyAttributes(host, "bunsetsu-0-0", "y")).toEqual(["-33", "-33", "-33"]);
+    expect(rubyAttributes(host, "bunsetsu-0-0", "y")).toEqual(["-57", "-57", "-57"]);
     expect(rubyAttributes(host, "bunsetsu-0-0", "textLength")).toEqual([
       null,
       "24",
@@ -321,5 +327,82 @@ describe("renderGraph ruby compression", () => {
 
     expect(rubyAttributes(host, "token-0", "x")).toEqual(["23.2"]);
     expect(rubyAttributes(host, "token-1", "x")).toEqual(["16"]);
+  });
+});
+
+describe("renderGraph gloss wrapping", () => {
+  const leaf = (id: string, secondaryLabel: string): GraphNode => ({
+    id,
+    kind: "token",
+    primaryLabel: "行か",
+    ruby: [{ start: 0, length: 1, reading: "い" }],
+    secondaryLabel,
+    children: [],
+  });
+  const model = (gloss: string): GraphNode => ({
+    id: "document-0",
+    kind: "document",
+    primaryLabel: "",
+    ruby: [],
+    secondaryLabel: "",
+    children: [
+      {
+        id: "bunsetsu-0-0",
+        kind: "bunsetsu",
+        primaryLabel: "行かない",
+        ruby: [{ start: 0, length: 1, reading: "い" }],
+        secondaryLabel: gloss,
+        children: [leaf("token-0", gloss), leaf("token-1", "not")],
+      },
+    ],
+  });
+  const gloss = "to go; to head (towards); to reach";
+  const lines = (host: HTMLElement, id: string) =>
+    [...host.querySelectorAll(`#graph-node-${id} .graph-secondary-label tspan`)].map(
+      (tspan) => [tspan.getAttribute("dy"), tspan.textContent],
+    );
+  const transforms = (host: HTMLElement) =>
+    ["bunsetsu-0-0", "token-0", "token-1"].map((id) =>
+      host.querySelector(`#graph-node-${id}`)?.getAttribute("transform"),
+    );
+
+  it("renders one line per tspan and lifts an internal label block by its extra lines", () => {
+    const host = document.createElement("div");
+    renderGraph(host, model(gloss));
+
+    expect(lines(host, "token-0")).toEqual([
+      ["1.5em", "(to go; to head (towards);"],
+      ["1.2em", "to reach)"],
+    ]);
+    expect(lines(host, "bunsetsu-0-0")).toEqual([
+      ["-.5em", "(to go; to head (towards);"],
+      ["1.2em", "to reach)"],
+    ]);
+    const internal = host.querySelector("#graph-node-bunsetsu-0-0");
+    expect(internal?.querySelector(".graph-secondary-label")?.getAttribute("y")).toBe("-12");
+    expect(internal?.querySelector(".graph-primary-label")?.getAttribute("dy")).toBe("-30");
+    expect(rubyAttributes(host, "bunsetsu-0-0", "y")).toEqual(["-45"]);
+    expect(rubyAttributes(host, "token-0", "y")).toEqual(["-10.8"]);
+    expect(transforms(host)).toEqual([
+      "translate(208,69)",
+      "translate(260,40)",
+      "translate(260,98)",
+    ]);
+  });
+
+  it("keeps a gloss of up to 30 characters on one line", () => {
+    const host = document.createElement("div");
+    renderGraph(host, model("to go; to reach"));
+
+    expect(lines(host, "token-0")).toEqual([["1.5em", "(to go; to reach)"]]);
+    expect(
+      host.querySelector("#graph-node-bunsetsu-0-0 .graph-secondary-label")?.getAttribute("y"),
+    ).toBeNull();
+    expect(rubyAttributes(host, "bunsetsu-0-0", "y")).toEqual(["-33"]);
+    expect(transforms(host)).toEqual([
+      "translate(154,66)",
+      "translate(206,40)",
+      "translate(206,92)",
+    ]);
   });
 });
