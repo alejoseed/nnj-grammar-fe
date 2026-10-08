@@ -4,6 +4,7 @@ import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 import { d3Source } from "./tools/vite/d3-source";
+import { layoutLab } from "./tools/vite/layout-lab";
 
 export default defineConfig({
   plugins: [
@@ -20,6 +21,7 @@ export default defineConfig({
       },
     }),
     d3Source(),
+    layoutLab(),
     react(),
     tailwindcss(),
   ],

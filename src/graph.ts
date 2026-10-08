@@ -743,7 +743,11 @@ export function renderGraph(
 
   link
     .data(root.links())
-    .attr("d", ({ source, target }) => linkPath(at(source), at(target), bends.get(target)));
+    .attr("d", ({ source, target }) => linkPath(at(source), at(target), bends.get(target)))
+    .attr("data-link-source", ({ source }) => source.data.id)
+    .attr("data-link-target", ({ target }) => target.data.id)
+    .attr("data-bend-start", ({ target }) => bends.get(target)?.start ?? null)
+    .attr("data-bend-end", ({ target }) => bends.get(target)?.end ?? null);
   node
     .data(root.descendants())
     .attr("transform", (point) => `translate(${at(point).x},${at(point).y})`)

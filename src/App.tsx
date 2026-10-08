@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { analyzeText } from "./api";
 import { DictionaryCard } from "./dictionary-card";
 import type { DictionarySelection } from "./dictionary-entry";
@@ -8,6 +8,8 @@ import { buildGraphModel, type GraphNode } from "./graph-model";
 import type { AnalysisDocument } from "./types";
 import PhraseBank from "./phrase-bank";
 import { MobileDictionary, MOBILE_DICTIONARY_QUERY } from "./mobile-dictionary";
+
+const LayoutLab = import.meta.env.DEV ? lazy(() => import("./dev/LayoutLab")) : null;
 
 const SEED_SENTENCE = "東京しか行かない";
 
@@ -20,6 +22,7 @@ export function App() {
   const graphHost = useRef<HTMLDivElement>(null);
   const [dictionary, setDictionary] = useState<DictionarySelection | null>(null);
   const dictionaryOrigin = useRef<SVGGElement | null>(null);
+  const [labOpen, setLabOpen] = useState(false);
 
   const openDictionary = useCallback((node: GraphNode, element: SVGGElement): boolean => {
     if (!doc || !window.matchMedia(MOBILE_DICTIONARY_QUERY).matches) {
@@ -65,10 +68,10 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (doc && graphHost.current) {
+    if (doc && graphHost.current && !labOpen) {
       renderGraph(graphHost.current, buildGraphModel(doc), openDictionary);
     }
-  }, [doc, openDictionary]);
+  }, [doc, openDictionary, labOpen]);
 
   const changePhrase = (newPhrase: string) => {
     setSentence(newPhrase);
@@ -122,7 +125,21 @@ export function App() {
       >
         <div className="relative h-full min-h-0 min-w-0">
           <div className="h-full min-h-0 min-w-0" ref={graphHost} />
-          {doc && (
+          {doc && LayoutLab && !labOpen && (
+            <button
+              type="button"
+              onClick={() => setLabOpen(true)}
+              className="absolute bottom-3 left-3 z-10 inline-flex h-10 items-center rounded-full border border-mist bg-white/90 px-3 text-sm font-medium text-aizome shadow-sm backdrop-blur transition-colors hover:bg-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-aizome"
+            >
+              Layout lab
+            </button>
+          )}
+          {doc && LayoutLab && labOpen && (
+            <Suspense fallback={null}>
+              <LayoutLab host={graphHost} doc={doc} onExit={() => setLabOpen(false)} />
+            </Suspense>
+          )}
+          {doc && !labOpen && (
             <button
               type="button"
               aria-label="Reset graph view"
