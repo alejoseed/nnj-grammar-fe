@@ -2,7 +2,7 @@ import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import type { Plugin } from "vite";
-import { isSafeKey, LayoutFeedback } from "../../src/dev/layout-lab-model";
+import { isSafeKey, LayoutFeedback } from "../../src/layout-lab-model";
 
 export const LAYOUT_LAB_ROUTE = "/__layout-lab";
 export const LAYOUT_LAB_DIRECTORY = "layout-feedback";

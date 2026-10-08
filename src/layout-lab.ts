@@ -1,6 +1,6 @@
 import * as d3 from "d3";
-import { linkPath, type Bend } from "../graph";
-import type { Point } from "../occupancy";
+import { linkPath, type Bend } from "./graph";
+import type { Point } from "./occupancy";
 import {
   clampBend,
   LabelSide,
@@ -12,7 +12,6 @@ import {
 
 const MOBILE_BREAKPOINT = 640;
 const HANDLE_RADIUS_PX = 5;
-/** Where a handle rests when its link keeps the plain curve. */
 const HANDLE_REST_PX = 14;
 const HANDLE_FILL = "var(--color-kohaku)";
 const MOVED_STROKE = "var(--color-kohaku)";
@@ -32,11 +31,12 @@ interface LinkState {
   endHandle: SVGCircleElement;
 }
 
+export type RestoreMode = "absolute" | "relative";
+
 export interface LayoutLab {
   snapshot: () => LayoutFeedback;
-  restore: (saved: LayoutFeedback) => void;
+  restore: (saved: LayoutFeedback, mode?: RestoreMode) => void;
   reset: () => void;
-  /** Bend handles start hidden: two amber dots per link bury the tree. */
   showHandles: (visible: boolean) => void;
   detach: () => void;
 }
@@ -91,11 +91,6 @@ function samePoint(a: Point, b: Point): boolean {
   return a.x === b.x && a.y === b.y;
 }
 
-/**
- * Turns the SVG that `renderGraph` drew into a canvas where nodes, label
- * blocks, and link bends drag. Nothing here recomputes layout: the user's
- * arrangement is recorded next to the renderer's so the two can be compared.
- */
 export function attachLayoutLab(
   host: HTMLElement,
   sentence: string,
@@ -135,10 +130,12 @@ export function attachLayoutLab(
   }
 
   const handles = d3.select(plot).append("g").attr("class", "lab-handles").attr("display", "none");
-  const handle = (): SVGCircleElement => {
+  const handle = (target: string, end: "start" | "end"): SVGCircleElement => {
     const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
     d3.select(circle)
       .attr("class", "lab-handle")
+      .attr("data-link-target", target)
+      .attr("data-handle", end)
       .attr("r", HANDLE_RADIUS_PX)
       .attr("fill", HANDLE_FILL)
       .attr("stroke", "white")
@@ -161,8 +158,8 @@ export function attachLayoutLab(
       source,
       target,
       feedback: { source: source.feedback.id, target: target.feedback.id, auto, final: auto },
-      startHandle: handle(),
-      endHandle: handle(),
+      startHandle: handle(target.feedback.id, "start"),
+      endHandle: handle(target.feedback.id, "end"),
     });
   }
 
@@ -236,7 +233,11 @@ export function attachLayoutLab(
       if (!node) {
         return;
       }
-      node.feedback.final = { x: Math.round(event.x), y: Math.round(event.y) };
+      const { auto } = node.feedback;
+      node.feedback.final = {
+        x: auto.x + Math.round(event.x - auto.x),
+        y: auto.y + Math.round(event.y - auto.y),
+      };
       drawNode(node);
       for (const link of linksTouching(node)) {
         drawLink(link);
@@ -291,13 +292,20 @@ export function attachLayoutLab(
 
   return {
     snapshot,
-    restore(saved) {
+    restore(saved, mode = "absolute") {
       for (const savedNode of saved.nodes) {
         const node = nodes.get(savedNode.id);
-        if (node) {
-          node.feedback.final = { ...savedNode.final };
-          node.feedback.labelPlacement.offset = { ...savedNode.labelPlacement.offset };
+        if (!node) {
+          continue;
         }
+        node.feedback.final =
+          mode === "absolute"
+            ? { ...savedNode.final }
+            : {
+                x: node.feedback.auto.x + savedNode.final.x - savedNode.auto.x,
+                y: node.feedback.auto.y + savedNode.final.y - savedNode.auto.y,
+              };
+        node.feedback.labelPlacement.offset = { ...savedNode.labelPlacement.offset };
       }
       for (const savedLink of saved.links) {
         const link = links.find((candidate) => candidate.feedback.target === savedLink.target);

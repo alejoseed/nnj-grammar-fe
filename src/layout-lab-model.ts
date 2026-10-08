@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { LayoutSettings } from "./layout-settings";
 
 const Point = z.object({ x: z.number(), y: z.number() });
 
@@ -7,7 +8,6 @@ const Bend = z.object({ start: z.number(), end: z.number() });
 export const LabelSide = z.enum(["above", "below", "right"]);
 export type LabelSide = z.infer<typeof LabelSide>;
 
-/** A node as the renderer placed it and as the user left it. Plot coordinates. */
 export const NodeFeedback = z.object({
   id: z.string(),
   label: z.string(),
@@ -18,15 +18,12 @@ export const NodeFeedback = z.object({
   labelPlacement: z.object({
     side: LabelSide,
     nudges: z.int().nonnegative(),
-    /** The primary label's baseline start relative to the node's center. */
     anchor: Point,
-    /** How far the user moved the label block from its automatic spot. */
     offset: Point,
   }),
 });
 export type NodeFeedback = z.infer<typeof NodeFeedback>;
 
-/** A link's bend: `null` is d3's plain midpoint curve. */
 export const LinkFeedback = z.object({
   source: z.string(),
   target: z.string(),
@@ -41,6 +38,7 @@ export const LayoutFeedback = z.object({
   savedAt: z.string(),
   viewport: z.object({ width: z.number(), height: z.number(), compact: z.boolean() }),
   notes: z.string(),
+  settings: LayoutSettings.optional(),
   nodes: z.array(NodeFeedback),
   links: z.array(LinkFeedback),
 });
@@ -49,7 +47,6 @@ export type LayoutFeedback = z.infer<typeof LayoutFeedback>;
 type PointValue = z.infer<typeof Point>;
 type BendValue = z.infer<typeof Bend>;
 
-/** Below this many pixels from the node, a handle snaps back to the plain curve. */
 export const SNAP_PX = 8;
 
 export function feedbackKey(sentence: string, compact: boolean): string {
@@ -61,10 +58,6 @@ export function isSafeKey(key: string): boolean {
   return /^[^/\\\0]+$/.test(key) && key !== "." && key !== "..";
 }
 
-/**
- * Keeps a bend inside its link: the start can only move right from the
- * source, the end only left from the target, and they never cross.
- */
 export function clampBend(bend: BendValue, source: PointValue, target: PointValue): BendValue | null {
   const start = Math.min(Math.max(bend.start, source.x), target.x);
   const end = Math.max(Math.min(bend.end, target.x), start);

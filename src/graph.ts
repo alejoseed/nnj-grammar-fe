@@ -1,6 +1,7 @@
 import * as d3 from "d3";
 import { wrapGloss } from "./gloss-lines";
 import type { GraphNode, RubyRun } from "./graph-model";
+import { DEFAULT_LAYOUT, type LayoutSettings } from "./layout-settings";
 import { OccupancyGrid, type Point, type Rect } from "./occupancy";
 import { layoutRuby, type MeasuredRun } from "./ruby-layout";
 
@@ -10,6 +11,9 @@ const MOBILE_BREAKPOINT = 640;
 const MOBILE_ROOT_X = 48;
 const VERTICAL_NODE_GAP = 52;
 const HORIZONTAL_LABEL_GAP = 32;
+const FIT_MARGIN_PX = 24;
+const STRETCH_MAX_CLEARANCE_PX = 40;
+const STRETCH_TOLERANCE_PX = 6;
 const NODE_TOP = 40;
 const MARGIN = { top: 20, left: 200 };
 const PRIMARY_FONT_PX = 12;
@@ -23,7 +27,6 @@ const LINK_STROKE_PX = 1.5;
 // ascent plus the ruby's descent, so the ruby's font box rests on the label's.
 // Chromium's default CJK fallback measures 12.2px and 3.1px at 12px and 7px.
 const RUBY_RISE_PX = 15;
-const LABEL_CLEARANCE_PX = 2;
 // An above label's gloss descends to a quarter gloss em over the center line,
 // where the node's links attach. A below label's first line keeps the same
 // distance under it.
@@ -59,11 +62,6 @@ export interface Bend {
   end: number;
 }
 
-interface Column {
-  x: number;
-  strip: Span;
-}
-
 /** Each drawn line's horizontal extent, relative to the node's center. */
 interface MeasuredLabel {
   primary: Span;
@@ -84,10 +82,16 @@ interface LabelBlock extends Reach {
   rects: Rect[];
 }
 
+interface Columns {
+  x: ReadonlyMap<PointNode, number>;
+  strips: ReadonlyMap<PointNode, Span>;
+}
+
 interface Layout {
   root: PointNode;
   at: (point: PointNode) => Point;
   bends: ReadonlyMap<PointNode, Bend>;
+  strips: Columns["strips"];
 }
 
 interface PlacedLabels {
@@ -349,44 +353,61 @@ function measureLabel(group: SVGGElement): MeasuredLabel | null {
   };
 }
 
-function depthExtents(
-  nodes: readonly TreeNode[],
-  labels: ReadonlyMap<TreeNode, MeasuredLabel>,
-): Map<number, Span> {
-  const extents = new Map<number, Span>();
-  for (const node of nodes) {
-    const spans: Span[] = [{ left: -HOVER_RADIUS_PX, right: HOVER_RADIUS_PX }];
-    const label = labels.get(node);
-    if (label) {
-      spans.push(label.primary, ...label.gloss);
-      if (label.ruby) {
-        spans.push(label.ruby);
-      }
-    }
-    const extent = extents.get(node.depth);
-    extents.set(node.depth, union(extent ? [extent, ...spans] : spans));
-  }
-  return extents;
+function labelLeft(point: TreeNode, labels: ReadonlyMap<TreeNode, MeasuredLabel>): number {
+  const label = labels.get(point);
+  const spans = label ? [label.primary, ...label.gloss, ...(label.ruby ? [label.ruby] : [])] : [];
+  return Math.min(-HOVER_RADIUS_PX, ...spans.map((span) => span.left));
 }
 
-function placeDepthColumns(extents: Map<number, Span>, maximumDepth: number): Column[] {
-  const columns: Column[] = [{ x: 0, strip: { left: 0, right: 0 } }];
-  let furthestRight = extents.get(0)?.right ?? HOVER_RADIUS_PX;
-
-  for (let depth = 1; depth <= maximumDepth; depth += 1) {
-    const extent = extents.get(depth) ?? { left: -HOVER_RADIUS_PX, right: HOVER_RADIUS_PX };
-    const position = furthestRight + HORIZONTAL_LABEL_GAP - extent.left;
-    columns.push({ x: position, strip: { left: furthestRight, right: position + extent.left } });
-    furthestRight = Math.max(furthestRight, position + extent.right);
+function placeColumns(
+  root: PointNode,
+  y: (point: PointNode) => number,
+  labels: ReadonlyMap<TreeNode, MeasuredLabel>,
+  reach: (node: TreeNode) => Reach,
+  settings: LayoutSettings,
+): Columns {
+  const x = new Map<PointNode, number>([[root, 0]]);
+  const strips = new Map<PointNode, Span>();
+  const blockers: Rect[] = [];
+  for (const parent of root.descendants()) {
+    const parentX = x.get(parent);
+    if (!parent.children || parentX === undefined) {
+      continue;
+    }
+    const spans = [
+      { y: y(parent), ...HOVER_REACH },
+      ...parent.children.map((child) => ({ y: y(child), ...reach(child) })),
+    ];
+    const top = Math.min(...spans.map((span) => span.y + span.top)) - LINK_INK_CLEARANCE_PX;
+    const bottom = Math.max(...spans.map((span) => span.y + span.bottom)) + LINK_INK_CLEARANCE_PX;
+    const wall = blockers.reduce(
+      (furthest, rect) =>
+        rect.bottom <= top || rect.top >= bottom || rect.right <= parentX
+          ? furthest
+          : Math.max(furthest, rect.right),
+      parentX + HOVER_RADIUS_PX,
+    );
+    const childrenLeft = Math.min(...parent.children.map((child) => labelLeft(child, labels)));
+    const childX = Math.max(parentX + settings.columnGapPx, wall + HORIZONTAL_LABEL_GAP - childrenLeft);
+    for (const child of parent.children) {
+      x.set(child, childX);
+      strips.set(child, { left: wall, right: childX + childrenLeft });
+      const label = labels.get(child);
+      if (label && !child.children) {
+        for (const rect of labelBlock(RIGHT, label).rects) {
+          blockers.push(shifted(rect, { x: childX, y: y(child) }));
+        }
+      }
+    }
   }
-
-  return columns;
+  return { x, strips };
 }
 
 function layOut(
   hierarchy: TreeNode,
-  columns: readonly Column[],
+  labels: ReadonlyMap<TreeNode, MeasuredLabel>,
   reach: (node: TreeNode) => Reach,
+  settings: LayoutSettings,
 ): Layout {
   const breadthFirst = hierarchy.descendants();
   const root = d3
@@ -396,25 +417,27 @@ function layOut(
       // d3 passes the pair in either order.
       const [upper, lower] =
         breadthFirst.indexOf(a) < breadthFirst.indexOf(b) ? [a, b] : [b, a];
-      const gap = reach(upper).bottom - reach(lower).top + LABEL_CLEARANCE_PX;
-      const cousinRow = a.parent === b.parent ? 0 : 1;
-      return cousinRow + Math.max(1, gap / VERTICAL_NODE_GAP);
+      const gap = reach(upper).bottom - reach(lower).top + settings.rowClearancePx;
+      const groupGap = a.parent === b.parent ? 0 : settings.groupGapPx;
+      return (gap + groupGap) / VERTICAL_NODE_GAP;
     })(hierarchy);
   const verticalOffset = NODE_TOP - (d3.min(root.descendants(), (point) => point.x) ?? 0);
+  const y = (point: PointNode): number => Math.round((point.x + verticalOffset) * 100) / 100;
+  const { x, strips } = placeColumns(root, y, labels, reach, settings);
   return {
     root,
-    at: (point) => ({ x: columns[point.depth]?.x ?? 0, y: point.x + verticalOffset }),
+    at: (point) => ({ x: x.get(point) ?? 0, y: y(point) }),
     bends: new Map(),
+    strips,
   };
 }
 
 function bendLinks(
   layout: Layout,
-  columns: readonly Column[],
   labels: ReadonlyMap<TreeNode, MeasuredLabel>,
   settled: ReadonlyMap<TreeNode, Placement>,
 ): Map<PointNode, Bend> {
-  const { root, at } = layout;
+  const { root, at, strips } = layout;
   const points = root.descendants();
   const labelGrid = new OccupancyGrid(GRID_CELL_PX);
   const ink: Array<{ owner: number; rect: Rect }> = [];
@@ -433,7 +456,7 @@ function bendLinks(
 
   const bends = new Map<PointNode, Bend>();
   points.forEach((point, owner) => {
-    const strip = columns[point.depth]?.strip;
+    const strip = strips.get(point);
     if (!point.parent || !strip) {
       return;
     }
@@ -482,9 +505,6 @@ function placeLabels(
   const placements = new Map<TreeNode, Placement>();
   const rectsOf = (point: PointNode, label: MeasuredLabel, placement: Placement): Rect[] =>
     labelBlock(placement, label).rects.map((rect) => shifted(rect, at(point)));
-  // Labels carry no padding of their own: rows already keep
-  // LABEL_CLEARANCE_PX between label blocks, and padding plus a cell of
-  // slack would reject a layout that keeps exactly that gap.
   const commit = (point: PointNode, owner: number, label: MeasuredLabel, placement: Placement) => {
     placements.set(point, placement);
     for (const rect of rectsOf(point, label, placement)) {
@@ -578,6 +598,7 @@ export function renderGraph(
   host: HTMLElement,
   model: GraphNode,
   onActivate?: (node: GraphNode, element: SVGGElement) => boolean,
+  settings: LayoutSettings = DEFAULT_LAYOUT,
 ): void {
   host.replaceChildren();
 
@@ -704,8 +725,6 @@ export function renderGraph(
       labels.set(point, label);
     }
   });
-  const columns = placeDepthColumns(depthExtents(nodes, labels), hierarchy.height);
-
   // The first pass's separation runs before any node has a position. d3
   // centers a parent between its first and last children, so a first or only
   // child's parent is below or level and a last child's is above. A middle
@@ -730,14 +749,48 @@ export function renderGraph(
     }
     return { top: above.top, bottom: below.bottom };
   };
-  const first = placeLabels(layOut(hierarchy, columns, reserved), labels, null);
-  const laidOut = layOut(hierarchy, columns, (point) => {
-    const label = labels.get(point);
-    const placement = first.placements.get(point);
-    return label && placement ? labelBlock(placement, label) : HOVER_REACH;
-  });
-  const layout = { ...laidOut, bends: bendLinks(laidOut, columns, labels, first.placements) };
-  const { placements, fallbacks } = placeLabels(layout, labels, first.placements);
+  const arrange = (rowClearancePx: number) => {
+    const spaced = { ...settings, rowClearancePx };
+    const first = placeLabels(layOut(hierarchy, labels, reserved, spaced), labels, null);
+    const laidOut = layOut(
+      hierarchy,
+      labels,
+      (point) => {
+        const label = labels.get(point);
+        const placement = first.placements.get(point);
+        return label && placement ? labelBlock(placement, label) : HOVER_REACH;
+      },
+      spaced,
+    );
+    const layout = { ...laidOut, bends: bendLinks(laidOut, labels, first.placements) };
+    const placed = placeLabels(layout, labels, first.placements);
+    return { layout, ...placed, bounds: treeBounds(layout.root, layout.at, labels, placed.placements) };
+  };
+
+  const fit = settings.fitToFrame && !compactViewport;
+  const frameHeight = viewHeight - 2 * FIT_MARGIN_PX;
+  let arranged = arrange(settings.rowClearancePx);
+  if (fit) {
+    let clearance = settings.rowClearancePx;
+    let height = arranged.bounds.bottom - arranged.bounds.top;
+    const rows = Math.max(1, hierarchy.leaves().length - 1);
+    for (let step = 0; step < 3 && height < frameHeight - STRETCH_TOLERANCE_PX; step += 1) {
+      const next = Math.min(STRETCH_MAX_CLEARANCE_PX, clearance + (frameHeight - height) / rows);
+      if (next <= clearance) {
+        break;
+      }
+      const candidate = arrange(next);
+      const candidateHeight = candidate.bounds.bottom - candidate.bounds.top;
+      if (candidateHeight > frameHeight) {
+        break;
+      }
+      clearance = next;
+      height = candidateHeight;
+      arranged = candidate;
+    }
+    svg.attr("data-row-clearance", Math.round(clearance * 10) / 10);
+  }
+  const { layout, placements, fallbacks, bounds } = arranged;
   const { root, at, bends } = layout;
   svg.attr("data-label-fallbacks", fallbacks);
 
@@ -834,9 +887,50 @@ export function renderGraph(
 
   const rootX = MARGIN.left + at(root).x;
   const rootY = MARGIN.top + at(root).y;
-  const initialTransform = d3.zoomIdentity.translate(
+  let initialTransform = d3.zoomIdentity.translate(
     (compactViewport ? MOBILE_ROOT_X : MARGIN.left) - rootX,
     viewHeight / 2 - rootY,
   );
+  if (fit) {
+    const scale = Math.min(
+      1,
+      (viewWidth - MARGIN.left - FIT_MARGIN_PX) / (bounds.right - bounds.left),
+      (viewHeight - 2 * FIT_MARGIN_PX) / (bounds.bottom - bounds.top),
+    );
+    const middleY = MARGIN.top + (bounds.top + bounds.bottom) / 2;
+    initialTransform = d3.zoomIdentity
+      .translate(MARGIN.left - scale * rootX, viewHeight / 2 - scale * middleY)
+      .scale(scale);
+    svg.attr("data-fit-scale", Math.round(scale * 1000) / 1000);
+  }
   svg.call(zoom.transform, initialTransform);
+}
+
+function treeBounds(
+  root: PointNode,
+  at: (point: PointNode) => Point,
+  labels: ReadonlyMap<TreeNode, MeasuredLabel>,
+  placements: ReadonlyMap<TreeNode, Placement>,
+): Rect {
+  const rects: Rect[] = [];
+  for (const point of root.descendants()) {
+    const center = at(point);
+    rects.push({
+      left: center.x - HOVER_RADIUS_PX,
+      top: center.y - HOVER_RADIUS_PX,
+      right: center.x + HOVER_RADIUS_PX,
+      bottom: center.y + HOVER_RADIUS_PX,
+    });
+    const label = labels.get(point);
+    const placement = placements.get(point);
+    if (label && placement) {
+      rects.push(...labelBlock(placement, label).rects.map((rect) => shifted(rect, center)));
+    }
+  }
+  return {
+    left: Math.min(...rects.map((rect) => rect.left)),
+    top: Math.min(...rects.map((rect) => rect.top)),
+    right: Math.max(...rects.map((rect) => rect.right)),
+    bottom: Math.max(...rects.map((rect) => rect.bottom)),
+  };
 }

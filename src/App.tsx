@@ -5,11 +5,12 @@ import type { DictionarySelection } from "./dictionary-entry";
 import { resolveDictionarySelection } from "./dictionary-model";
 import { renderGraph } from "./graph";
 import { buildGraphModel, type GraphNode } from "./graph-model";
+import { loadLayoutSettings, type LayoutSettings } from "./layout-settings";
 import type { AnalysisDocument } from "./types";
 import PhraseBank from "./phrase-bank";
 import { MobileDictionary, MOBILE_DICTIONARY_QUERY } from "./mobile-dictionary";
 
-const LayoutLab = import.meta.env.DEV ? lazy(() => import("./dev/LayoutLab")) : null;
+const LayoutLab = lazy(() => import("./LayoutLab"));
 
 const SEED_SENTENCE = "東京しか行かない";
 
@@ -23,6 +24,7 @@ export function App() {
   const [dictionary, setDictionary] = useState<DictionarySelection | null>(null);
   const dictionaryOrigin = useRef<SVGGElement | null>(null);
   const [labOpen, setLabOpen] = useState(false);
+  const [layout, setLayout] = useState<LayoutSettings>(() => loadLayoutSettings());
 
   const openDictionary = useCallback((node: GraphNode, element: SVGGElement): boolean => {
     if (!doc || !window.matchMedia(MOBILE_DICTIONARY_QUERY).matches) {
@@ -69,9 +71,9 @@ export function App() {
 
   useEffect(() => {
     if (doc && graphHost.current && !labOpen) {
-      renderGraph(graphHost.current, buildGraphModel(doc), openDictionary);
+      renderGraph(graphHost.current, buildGraphModel(doc), openDictionary, layout);
     }
-  }, [doc, openDictionary, labOpen]);
+  }, [doc, openDictionary, labOpen, layout]);
 
   const changePhrase = (newPhrase: string) => {
     setSentence(newPhrase);
@@ -80,7 +82,7 @@ export function App() {
 
   const resetGraphView = () => {
     if (doc && graphHost.current) {
-      renderGraph(graphHost.current, buildGraphModel(doc), openDictionary);
+      renderGraph(graphHost.current, buildGraphModel(doc), openDictionary, layout);
     }
   };
 
@@ -125,18 +127,24 @@ export function App() {
       >
         <div className="relative h-full min-h-0 min-w-0">
           <div className="h-full min-h-0 min-w-0" ref={graphHost} />
-          {doc && LayoutLab && !labOpen && (
+          {doc && !labOpen && (
             <button
               type="button"
               onClick={() => setLabOpen(true)}
               className="absolute bottom-3 left-3 z-10 inline-flex h-10 items-center rounded-full border border-mist bg-white/90 px-3 text-sm font-medium text-aizome shadow-sm backdrop-blur transition-colors hover:bg-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-aizome"
             >
-              Layout lab
+              Layout
             </button>
           )}
-          {doc && LayoutLab && labOpen && (
+          {doc && labOpen && (
             <Suspense fallback={null}>
-              <LayoutLab host={graphHost} doc={doc} onExit={() => setLabOpen(false)} />
+              <LayoutLab
+                host={graphHost}
+                doc={doc}
+                settings={layout}
+                onSettingsChange={setLayout}
+                onExit={() => setLabOpen(false)}
+              />
             </Suspense>
           )}
           {doc && !labOpen && (
