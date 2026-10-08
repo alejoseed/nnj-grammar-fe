@@ -30,8 +30,10 @@ const LABEL_CLEARANCE_PX = 2;
 const CENTER_LINE_CLEARANCE_PX = GLOSS_FONT_PX / 4;
 const GRID_CELL_PX = 2;
 const GRID_PADDING_PX = 1;
+const LINK_RADIUS_PX = LINK_STROKE_PX / 2 + GRID_PADDING_PX;
 const NUDGE_PX = 12;
 const MAX_NUDGES = 2;
+const LINK_INK_CLEARANCE_PX = 3;
 
 const EMPHASIS_COLOR = "var(--color-shu)";
 
@@ -50,6 +52,16 @@ const HANGING_CANDIDATES: Placement[] = Array.from({ length: MAX_NUDGES + 1 }, (
 interface Span {
   left: number;
   right: number;
+}
+
+export interface Bend {
+  start: number;
+  end: number;
+}
+
+interface Column {
+  x: number;
+  strip: Span;
 }
 
 /** Each drawn line's horizontal extent, relative to the node's center. */
@@ -75,6 +87,7 @@ interface LabelBlock extends Reach {
 interface Layout {
   root: PointNode;
   at: (point: PointNode) => Point;
+  bends: ReadonlyMap<PointNode, Bend>;
 }
 
 interface PlacedLabels {
@@ -136,20 +149,52 @@ function labelBlock(placement: Placement, label: MeasuredLabel): LabelBlock {
   };
 }
 
-/** The points of d3.linkHorizontal's cubic, at most `step` apart. */
-export function sampleLink(source: Point, target: Point, step: number): Point[] {
-  const middle = (source.x + target.x) / 2;
+export function linkPath(
+  source: Point,
+  target: Point,
+  bend: Bend = { start: source.x, end: target.x },
+): string {
+  const middle = (bend.start + bend.end) / 2;
+  const path = d3.pathRound();
+  path.moveTo(source.x, source.y);
+  if (bend.start > source.x) {
+    path.lineTo(bend.start, source.y);
+  }
+  path.bezierCurveTo(middle, source.y, middle, target.y, bend.end, target.y);
+  if (bend.end < target.x) {
+    path.lineTo(target.x, target.y);
+  }
+  return path.toString();
+}
+
+export function sampleLink(
+  source: Point,
+  target: Point,
+  step: number,
+  bend: Bend = { start: source.x, end: target.x },
+): Point[] {
+  const middle = (bend.start + bend.end) / 2;
   // A cubic's speed never exceeds three times its longest control leg.
-  const longestLeg = Math.max(Math.abs(target.x - source.x) / 2, Math.abs(target.y - source.y));
+  const longestLeg = Math.max((bend.end - bend.start) / 2, Math.abs(target.y - source.y));
   const segments = Math.max(1, Math.ceil((3 * longestLeg) / step));
-  return Array.from({ length: segments + 1 }, (_, index) => {
+  const curve = Array.from({ length: segments + 1 }, (_, index) => {
     const t = index / segments;
     const u = 1 - t;
     return {
-      x: u ** 3 * source.x + 3 * u * t * middle + t ** 3 * target.x,
+      x: u ** 3 * bend.start + 3 * u * t * middle + t ** 3 * bend.end,
       y: (u ** 3 + 3 * u ** 2 * t) * source.y + (3 * u * t ** 2 + t ** 3) * target.y,
     };
   });
+  const level = (from: Point, to: Point): Point[] => {
+    const pieces = Math.ceil(Math.abs(to.x - from.x) / step);
+    return Array.from({ length: pieces }, (_, index) => ({
+      x: from.x + ((to.x - from.x) * index) / pieces,
+      y: from.y,
+    }));
+  };
+  const first = curve[0] ?? source;
+  const last = curve.at(-1) ?? target;
+  return [...level(source, first), ...curve.slice(0, -1), ...level(last, target), target];
 }
 
 function shifted(rect: Rect, by: Point): Rect {
@@ -324,14 +369,14 @@ function depthExtents(
   return extents;
 }
 
-function placeDepthColumns(extents: Map<number, Span>, maximumDepth: number): number[] {
-  const columns = [0];
+function placeDepthColumns(extents: Map<number, Span>, maximumDepth: number): Column[] {
+  const columns: Column[] = [{ x: 0, strip: { left: 0, right: 0 } }];
   let furthestRight = extents.get(0)?.right ?? HOVER_RADIUS_PX;
 
   for (let depth = 1; depth <= maximumDepth; depth += 1) {
     const extent = extents.get(depth) ?? { left: -HOVER_RADIUS_PX, right: HOVER_RADIUS_PX };
     const position = furthestRight + HORIZONTAL_LABEL_GAP - extent.left;
-    columns.push(position);
+    columns.push({ x: position, strip: { left: furthestRight, right: position + extent.left } });
     furthestRight = Math.max(furthestRight, position + extent.right);
   }
 
@@ -340,7 +385,7 @@ function placeDepthColumns(extents: Map<number, Span>, maximumDepth: number): nu
 
 function layOut(
   hierarchy: TreeNode,
-  columns: readonly number[],
+  columns: readonly Column[],
   reach: (node: TreeNode) => Reach,
 ): Layout {
   const breadthFirst = hierarchy.descendants();
@@ -358,8 +403,65 @@ function layOut(
   const verticalOffset = NODE_TOP - (d3.min(root.descendants(), (point) => point.x) ?? 0);
   return {
     root,
-    at: (point) => ({ x: columns[point.depth] ?? 0, y: point.x + verticalOffset }),
+    at: (point) => ({ x: columns[point.depth]?.x ?? 0, y: point.x + verticalOffset }),
+    bends: new Map(),
   };
+}
+
+function bendLinks(
+  layout: Layout,
+  columns: readonly Column[],
+  labels: ReadonlyMap<TreeNode, MeasuredLabel>,
+  settled: ReadonlyMap<TreeNode, Placement>,
+): Map<PointNode, Bend> {
+  const { root, at } = layout;
+  const points = root.descendants();
+  const labelGrid = new OccupancyGrid(GRID_CELL_PX);
+  const ink: Array<{ owner: number; rect: Rect }> = [];
+  points.forEach((point, owner) => {
+    const label = labels.get(point);
+    const placement = settled.get(point);
+    if (!label || !placement) {
+      return;
+    }
+    for (const rect of labelBlock(placement, label).rects) {
+      const placed = shifted(rect, at(point));
+      labelGrid.paintRect(placed, 0, owner);
+      ink.push({ owner, rect: placed });
+    }
+  });
+
+  const bends = new Map<PointNode, Bend>();
+  points.forEach((point, owner) => {
+    const strip = columns[point.depth]?.strip;
+    if (!point.parent || !strip) {
+      return;
+    }
+    const source = at(point.parent);
+    const target = at(point);
+    const crossesLabel = sampleLink(source, target, GRID_CELL_PX).some(
+      ({ x, y }) => !labelGrid.isFree({ left: x, top: y, right: x, bottom: y }, LINK_RADIUS_PX, owner),
+    );
+    if (!crossesLabel) {
+      return;
+    }
+    const top = Math.min(source.y, target.y) - LINK_INK_CLEARANCE_PX;
+    const bottom = Math.max(source.y, target.y) + LINK_INK_CLEARANCE_PX;
+    const bend = { start: source.x, end: target.x };
+    for (const { owner: inkOwner, rect } of ink) {
+      if (inkOwner === owner || rect.bottom <= top || rect.top >= bottom) {
+        continue;
+      }
+      if (rect.right <= strip.left && rect.right + LINK_INK_CLEARANCE_PX > bend.start) {
+        bend.start = Math.min(strip.left, rect.right + LINK_INK_CLEARANCE_PX);
+      }
+      if (rect.left >= strip.right && rect.left - LINK_INK_CLEARANCE_PX < bend.end) {
+        bend.end = Math.max(strip.right, rect.left - LINK_INK_CLEARANCE_PX);
+      }
+    }
+    bends.set(point, bend);
+  });
+  return bends;
 }
 
 function placeLabels(
@@ -367,15 +469,14 @@ function placeLabels(
   labels: ReadonlyMap<TreeNode, MeasuredLabel>,
   firstPass: ReadonlyMap<TreeNode, Placement> | null,
 ): PlacedLabels {
-  const { root, at } = layout;
+  const { root, at, bends } = layout;
   const points = root.descendants();
   const grid = new OccupancyGrid(GRID_CELL_PX);
-  const linkRadius = LINK_STROKE_PX / 2 + GRID_PADDING_PX;
   const incoming = (point: PointNode): Point[] =>
-    point.parent ? sampleLink(at(point.parent), at(point), GRID_CELL_PX) : [];
+    point.parent ? sampleLink(at(point.parent), at(point), GRID_CELL_PX, bends.get(point)) : [];
   points.forEach((point, owner) => {
     grid.paintDisc(at(point), HOVER_RADIUS_PX + GRID_PADDING_PX, owner);
-    grid.paintPolyline(incoming(point), linkRadius, owner);
+    grid.paintPolyline(incoming(point), LINK_RADIUS_PX, owner);
   });
 
   const placements = new Map<TreeNode, Placement>();
@@ -407,7 +508,7 @@ function placeLabels(
     // held to its own link exactly instead.
     const ownLink = incoming(point);
     const clearsOwnLink = (rects: Rect[]): boolean =>
-      ownLink.every((sample) => rects.every((rect) => distanceToRect(sample, rect) >= linkRadius));
+      ownLink.every((sample) => rects.every((rect) => distanceToRect(sample, rect) >= LINK_RADIUS_PX));
     const free = HANGING_CANDIDATES.find((placement) => {
       const rects = rectsOf(point, label, placement);
       return clearsOwnLink(rects) && rects.every((rect) => grid.isFree(rect, 0, owner));
@@ -624,24 +725,19 @@ export function renderGraph(
     return { top: above.top, bottom: below.bottom };
   };
   const first = placeLabels(layOut(hierarchy, columns, reserved), labels, null);
-  const layout = layOut(hierarchy, columns, (point) => {
+  const laidOut = layOut(hierarchy, columns, (point) => {
     const label = labels.get(point);
     const placement = first.placements.get(point);
     return label && placement ? labelBlock(placement, label) : HOVER_REACH;
   });
+  const layout = { ...laidOut, bends: bendLinks(laidOut, columns, labels, first.placements) };
   const { placements, fallbacks } = placeLabels(layout, labels, first.placements);
-  const { root, at } = layout;
+  const { root, at, bends } = layout;
   svg.attr("data-label-fallbacks", fallbacks);
 
   link
     .data(root.links())
-    .attr(
-      "d",
-      d3
-        .linkHorizontal<d3.HierarchyPointLink<GraphNode>, PointNode>()
-        .x((point) => at(point).x)
-        .y((point) => at(point).y),
-    );
+    .attr("d", ({ source, target }) => linkPath(at(source), at(target), bends.get(target)));
   node
     .data(root.descendants())
     .attr("transform", (point) => `translate(${at(point).x},${at(point).y})`)

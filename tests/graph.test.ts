@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fixture from "../../nnj-grammar/tests/fixtures/analysis-soshite.json";
 import hanbaiki from "../../nnj-grammar/tests/fixtures/analysis-hanbaiki.json";
 import { buildGraphModel, type GraphNode, type RubyRun } from "../src/graph-model";
-import { placeRuby, renderGraph, sampleLink } from "../src/graph";
+import { linkPath, placeRuby, renderGraph, sampleLink } from "../src/graph";
 import { AnalysisDocument } from "../src/types";
 
 describe("renderGraph", () => {
@@ -426,6 +426,34 @@ describe("sampleLink", () => {
   });
 });
 
+describe("linkPath", () => {
+  it("is d3.linkHorizontal when the bend spans the whole gap", () => {
+    expect(linkPath({ x: 0, y: 222 }, { x: 208, y: 66 }, { start: 0, end: 208 })).toBe(
+      "M0,222C104,222,104,66,208,66",
+    );
+  });
+
+  it("runs level into and out of a narrower bend", () => {
+    expect(linkPath({ x: 0, y: 222 }, { x: 208, y: 66 }, { start: 10, end: 52 })).toBe(
+      "M0,222L10,222C31,222,31,66,52,66L208,66",
+    );
+  });
+});
+
+describe("sampleLink with a bend", () => {
+  it("stays level outside the bend and keeps samples a step apart", () => {
+    const samples = sampleLink({ x: 0, y: 222 }, { x: 208, y: 66 }, 2, { start: 10, end: 52 });
+    const gaps = samples.slice(1).map((sample, index) =>
+      Math.hypot(sample.x - samples[index]!.x, sample.y - samples[index]!.y),
+    );
+    expect(samples[0]).toEqual({ x: 0, y: 222 });
+    expect(samples.at(-1)).toEqual({ x: 208, y: 66 });
+    expect(samples.filter((sample) => sample.x <= 10).every((sample) => sample.y === 222)).toBe(true);
+    expect(samples.filter((sample) => sample.x >= 52).every((sample) => sample.y === 66)).toBe(true);
+    expect(Math.max(...gaps)).toBeLessThanOrEqual(2);
+  });
+});
+
 describe("renderGraph label placement", () => {
   const ruby: RubyRun[] = [{ start: 0, length: 1, reading: "い" }];
   const token = (id: string): GraphNode => ({
@@ -534,15 +562,46 @@ describe("renderGraph label placement", () => {
     expect(block(narrow, "bunsetsu-0-1").primary).toBe("24.5");
     expect(fallbacks(narrow)).toBe("0");
 
-    const wide = render(
+    const grazed = render(
+      scaffold("document-0", "document", [
+        {
+          ...bunsetsu("bunsetsu-0", "", 0),
+          children: [
+            {
+              ...bunsetsu("bunsetsu-0-0", "", 0),
+              children: [
+                token("token-0"),
+                { ...bunsetsu("bunsetsu-0-0-1", "to go", 1), primaryLabel: "行か" },
+                token("token-2"),
+              ],
+            },
+          ],
+        },
+      ]),
+    );
+    expect(["bunsetsu-0-0", "bunsetsu-0-0-1"].map((id) => rowOf(grazed, id))).toEqual([95.75, 99.5]);
+    expect(block(grazed, "bunsetsu-0-0-1")).toEqual({ primary: "-18", gloss: ["-5"], ruby: ["-33"] });
+    expect(fallbacks(grazed)).toBe("1");
+  });
+
+  it("bends the link to the last child level past a long middle label and leaves the link to the first child d3's cubic", () => {
+    const host = render(
       scaffold("document-0", "document", [
         bunsetsu("bunsetsu-0-0", "", 1),
         { ...bunsetsu("bunsetsu-0-1", "please do not go there", 1), primaryLabel: "行かないでください" },
         bunsetsu("bunsetsu-0-2", "", 1),
       ]),
     );
-    expect(block(wide, "bunsetsu-0-1")).toEqual({ primary: "24.5", gloss: ["37.5"], ruby: ["9.5"] });
-    expect(fallbacks(wide)).toBe("1");
+
+    expect(
+      [...host.querySelectorAll("path.graph-link")].slice(0, 3).map((path) => path.getAttribute("d")),
+    ).toEqual([
+      "M0,144C98,144,98,40,196,40",
+      "M0,144C98,144,98,144,196,144",
+      "M0,144C21,144,21,248,42,248L196,248",
+    ]);
+    expect(block(host, "bunsetsu-0-1")).toEqual({ primary: "24.5", gloss: ["37.5"], ruby: ["9.5"] });
+    expect(fallbacks(host)).toBe("0");
   });
 
   it("records each hanging label's side and nudges on its node", () => {
