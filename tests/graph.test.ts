@@ -1,4 +1,4 @@
-import { select, timerFlush, type HierarchyPointNode } from "d3";
+import { timerFlush } from "d3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fixture from "../../nnj-grammar/tests/fixtures/analysis-soshite.json";
 import hanbaiki from "../../nnj-grammar/tests/fixtures/analysis-hanbaiki.json";
@@ -45,7 +45,7 @@ describe("renderGraph", () => {
       "#graph-node-bunsetsu-0-1 .graph-primary-label",
     );
     expect(internalLabel?.getAttribute("x")).toBe("-10");
-    expect(internalLabel?.getAttribute("dy")).toBe("-30");
+    expect(internalLabel?.getAttribute("dy")).toBe("32");
     expect(internalLabel?.getAttribute("text-anchor")).toBe("end");
     const leafLabel = host.querySelector(
       "#graph-node-token-1 .graph-primary-label",
@@ -190,8 +190,7 @@ describe("renderGraph furigana", () => {
 
   it("measures each reading afresh when ruby is placed again", () => {
     const group = host.querySelector<SVGGElement>("#graph-node-word-0-2")!;
-    const point = select<SVGGElement, HierarchyPointNode<GraphNode>>(group).datum();
-    placeRuby(group, point);
+    placeRuby(group);
     expect(rubyAttributes(host, "word-0-2", "textLength")).toEqual([
       null,
       "24",
@@ -204,7 +203,7 @@ describe("renderGraph furigana", () => {
     ]);
 
     group.querySelectorAll(".graph-ruby")[1]!.textContent = "は";
-    placeRuby(group, point);
+    placeRuby(group);
     expect(rubyAttributes(host, "word-0-2", "textLength")).toEqual([
       null,
       null,
@@ -359,7 +358,7 @@ describe("renderGraph gloss wrapping", () => {
   const gloss = "to go; to head (towards); to reach";
   const lines = (host: HTMLElement, id: string) =>
     [...host.querySelectorAll(`#graph-node-${id} .graph-secondary-label tspan`)].map(
-      (tspan) => [tspan.getAttribute("dy"), tspan.textContent],
+      (tspan) => [tspan.getAttribute("y"), tspan.textContent],
     );
   const transforms = (host: HTMLElement) =>
     ["bunsetsu-0-0", "token-0", "token-1"].map((id) =>
@@ -371,22 +370,22 @@ describe("renderGraph gloss wrapping", () => {
     renderGraph(host, model(gloss));
 
     expect(lines(host, "token-0")).toEqual([
-      ["1.5em", "(to go; to head (towards);"],
-      ["1.2em", "to reach)"],
+      ["15", "(to go; to head (towards);"],
+      ["27", "to reach)"],
     ]);
     expect(lines(host, "bunsetsu-0-0")).toEqual([
-      ["-.5em", "(to go; to head (towards);"],
-      ["1.2em", "to reach)"],
+      ["-17", "(to go; to head (towards);"],
+      ["-5", "to reach)"],
     ]);
-    const internal = host.querySelector("#graph-node-bunsetsu-0-0");
-    expect(internal?.querySelector(".graph-secondary-label")?.getAttribute("y")).toBe("-12");
-    expect(internal?.querySelector(".graph-primary-label")?.getAttribute("dy")).toBe("-30");
+    expect(
+      host.querySelector("#graph-node-bunsetsu-0-0 .graph-primary-label")?.getAttribute("dy"),
+    ).toBe("-30");
     expect(rubyAttributes(host, "bunsetsu-0-0", "y")).toEqual(["-45"]);
     expect(rubyAttributes(host, "token-0", "y")).toEqual(["-10.8"]);
     expect(transforms(host)).toEqual([
-      "translate(208,69)",
+      "translate(208,66)",
       "translate(260,40)",
-      "translate(260,98)",
+      "translate(260,92)",
     ]);
   });
 
@@ -394,15 +393,119 @@ describe("renderGraph gloss wrapping", () => {
     const host = document.createElement("div");
     renderGraph(host, model("to go; to reach"));
 
-    expect(lines(host, "token-0")).toEqual([["1.5em", "(to go; to reach)"]]);
-    expect(
-      host.querySelector("#graph-node-bunsetsu-0-0 .graph-secondary-label")?.getAttribute("y"),
-    ).toBeNull();
+    expect(lines(host, "token-0")).toEqual([["15", "(to go; to reach)"]]);
+    expect(lines(host, "bunsetsu-0-0")).toEqual([["-5", "(to go; to reach)"]]);
     expect(rubyAttributes(host, "bunsetsu-0-0", "y")).toEqual(["-33"]);
     expect(transforms(host)).toEqual([
       "translate(154,66)",
       "translate(206,40)",
       "translate(206,92)",
     ]);
+  });
+});
+
+describe("renderGraph label side", () => {
+  const ruby: RubyRun[] = [{ start: 0, length: 1, reading: "い" }];
+  const token = (id: string): GraphNode => ({
+    id,
+    kind: "token",
+    primaryLabel: "行か",
+    ruby,
+    secondaryLabel: "to go",
+    children: [],
+  });
+  const bunsetsu = (id: string, secondaryLabel: string, leaves: number): GraphNode => ({
+    id,
+    kind: "bunsetsu",
+    primaryLabel: "行かない",
+    ruby,
+    secondaryLabel,
+    children: Array.from({ length: leaves }, (_, index) => token(`${id}-token-${index}`)),
+  });
+  const scaffold = (id: string, kind: GraphNode["kind"], children: GraphNode[]): GraphNode => ({
+    id,
+    kind,
+    primaryLabel: "",
+    ruby: [],
+    secondaryLabel: "",
+    children,
+  });
+  const render = (model: GraphNode): HTMLElement => {
+    const host = document.createElement("div");
+    renderGraph(host, model);
+    return host;
+  };
+  const block = (host: HTMLElement, id: string) => ({
+    primary: host.querySelector(`#graph-node-${id} .graph-primary-label`)?.getAttribute("dy"),
+    gloss: [...host.querySelectorAll(`#graph-node-${id} .graph-secondary-label tspan`)].map(
+      (line) => line.getAttribute("y"),
+    ),
+    ruby: rubyAttributes(host, id, "y"),
+  });
+  const rowOf = (host: HTMLElement, id: string): number =>
+    Number(
+      /,([-\d.]+)\)$/.exec(host.querySelector(`#graph-node-${id}`)?.getAttribute("transform") ?? "")?.[1],
+    );
+
+  it("hangs a last child's label below its circle and keeps a first child's above", () => {
+    const host = render(
+      scaffold("document-0", "document", [
+        bunsetsu("bunsetsu-0-0", "Will/Does/Do (not)", 1),
+        bunsetsu("bunsetsu-0-1", "to go; to head (towards); to reach", 1),
+      ]),
+    );
+
+    expect(block(host, "bunsetsu-0-0")).toEqual({ primary: "-18", gloss: ["-5"], ruby: ["-33"] });
+    expect(block(host, "bunsetsu-0-1")).toEqual({
+      primary: "32",
+      gloss: ["45", "57"],
+      ruby: ["17"],
+    });
+    expect(["bunsetsu-0-0", "document-0", "bunsetsu-0-1"].map((id) => rowOf(host, id))).toEqual([
+      40, 92, 144,
+    ]);
+  });
+
+  it("hangs a middle child's label below only when its parent lands above it", () => {
+    const lopsided = render(
+      scaffold("document-0", "document", [
+        bunsetsu("bunsetsu-0-0", "", 2),
+        bunsetsu("bunsetsu-0-1", "", 1),
+        bunsetsu("bunsetsu-0-2", "", 1),
+      ]),
+    );
+    expect(["document-0", "bunsetsu-0-1"].map((id) => rowOf(lopsided, id))).toEqual([
+      183, 196,
+    ]);
+    expect(block(lopsided, "bunsetsu-0-1").primary).toBe("32");
+
+    const level = render(
+      scaffold("document-0", "document", [
+        bunsetsu("bunsetsu-0-0", "", 2),
+        bunsetsu("bunsetsu-0-1", "", 1),
+        bunsetsu("bunsetsu-0-2", "", 2),
+      ]),
+    );
+    expect(["document-0", "bunsetsu-0-1"].map((id) => rowOf(level, id))).toEqual([196, 196]);
+    expect(block(level, "bunsetsu-0-1").primary).toBe("-18");
+  });
+
+  it("parts a label hung below from the next cousin's label above by both blocks", () => {
+    const host = render(
+      scaffold("document-0", "document", [
+        scaffold("sentence-0", "sentence", [
+          bunsetsu("bunsetsu-0-0", "to go", 1),
+          bunsetsu("bunsetsu-0-1", "to go", 1),
+        ]),
+        scaffold("sentence-1", "sentence", [
+          bunsetsu("bunsetsu-1-0", "to go", 1),
+          bunsetsu("bunsetsu-1-1", "to go", 1),
+        ]),
+      ]),
+    );
+
+    expect(block(host, "bunsetsu-0-1").primary).toBe("32");
+    expect(block(host, "bunsetsu-1-0").primary).toBe("-18");
+    expect(rowOf(host, "bunsetsu-1-0") - rowOf(host, "bunsetsu-0-1")).toBe(141.5);
   });
 });

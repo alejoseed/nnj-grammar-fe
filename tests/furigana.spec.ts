@@ -156,6 +156,13 @@ interface PlacedText {
   role: string;
   content: string;
   client: Box;
+  lines: Box[];
+}
+
+interface PlacedLink {
+  source: string;
+  target: string;
+  points: Array<{ x: number; y: number }>;
 }
 
 interface MeasuredRuby {
@@ -180,6 +187,7 @@ interface MeasuredRuby {
 interface GraphMeasurement {
   texts: PlacedText[];
   rubies: MeasuredRuby[];
+  links: PlacedLink[];
 }
 
 /** Runs in the page, so it may not reference anything outside its body. */
@@ -205,12 +213,50 @@ function measureGraph(): GraphMeasurement {
   ];
 
   return {
-    texts: texts.map((text) => ({
-      nodeId: nodeIdOf(text),
-      role: text.getAttribute("class")?.split(" ")[0] ?? "",
-      content: text.textContent ?? "",
-      client: toBox(text.getBoundingClientRect()),
-    })),
+    texts: texts.map((text) => {
+      const spans = [...text.querySelectorAll("tspan")];
+      return {
+        nodeId: nodeIdOf(text),
+        role: text.getAttribute("class")?.split(" ")[0] ?? "",
+        content: text.textContent ?? "",
+        client: toBox(text.getBoundingClientRect()),
+        lines: (spans.length > 0 ? spans : [text]).map((line) =>
+          toBox(line.getBoundingClientRect()),
+        ),
+      };
+    }),
+    links: [
+      ...document.querySelectorAll<SVGPathElement>("svg[role=tree] path.graph-link"),
+    ].map((path) => {
+      const matrix = path.getScreenCTM();
+      if (!matrix) {
+        throw new Error("a graph link has no screen transform");
+      }
+      const length = path.getTotalLength();
+      const step = 2;
+      const points = Array.from({ length: Math.floor(length / step) + 1 }, (_, index) => {
+        const { x, y } = path.getPointAtLength(index * step).matrixTransform(matrix);
+        return { x, y };
+      });
+      const nodeAt = (point: { x: number; y: number }): string => {
+        const node = [...document.querySelectorAll<SVGGElement>("svg[role=tree] g.graph-node")].find(
+          (group) => {
+            const circle = group.querySelector("circle")?.getBoundingClientRect();
+            return (
+              circle !== undefined &&
+              Math.hypot(circle.x + circle.width / 2 - point.x, circle.y + circle.height / 2 - point.y) < 1
+            );
+          },
+        );
+        if (!node) {
+          throw new Error(`no node sits at link end ${point.x},${point.y}`);
+        }
+        return node.id.replace(/^graph-node-/, "");
+      };
+      const start = path.getPointAtLength(0).matrixTransform(matrix);
+      const end = path.getPointAtLength(length).matrixTransform(matrix);
+      return { source: nodeAt(start), target: nodeAt(end), points };
+    }),
     rubies: texts.flatMap((ruby, textIndex) => {
       if (!ruby.classList.contains("graph-ruby")) {
         return [];
@@ -503,6 +549,64 @@ function checkGeometry(sentence: Sentence, measurement: GraphMeasurement): void 
   }
 }
 
+function inside(box: Box, point: { x: number; y: number }): boolean {
+  return (
+    point.x > box.x &&
+    point.x < box.x + box.width &&
+    point.y > box.y &&
+    point.y < box.y + box.height
+  );
+}
+
+function checkLinksAndRows(sentence: Sentence, measurement: GraphMeasurement): void {
+  const { links, texts } = measurement;
+  for (const link of links) {
+    for (const text of texts) {
+      if (text.nodeId !== link.source && text.nodeId !== link.target) {
+        continue;
+      }
+      expectAtMost(
+        "G9 link clear of its own labels",
+        {
+          where: `sentence ${sentence.number} ${sentence.text}, link ${link.source}->${link.target}, ${text.role} "${text.content}" of ${text.nodeId}`,
+          numbers: `line boxes ${text.lines.map(boxText).join(" | ")}`,
+        },
+        link.points.filter((point) => text.lines.some((line) => inside(line, point))).length,
+        0,
+      );
+    }
+  }
+
+  for (const text of texts) {
+    let worst = { overlap: Number.NEGATIVE_INFINITY, other: "nothing" };
+    for (const other of texts) {
+      if (other.nodeId === text.nodeId) {
+        continue;
+      }
+      for (const line of text.lines) {
+        for (const otherLine of other.lines) {
+          const amount = overlap(line, otherLine);
+          if (amount > worst.overlap) {
+            worst = {
+              overlap: amount,
+              other: `${other.role} "${other.content}" of ${other.nodeId} (line ${boxText(otherLine)})`,
+            };
+          }
+        }
+      }
+    }
+    expectAtMost(
+      "G10 no text overlaps another node's text",
+      {
+        where: `sentence ${sentence.number} ${sentence.text}, ${text.role} "${text.content}" of ${text.nodeId}`,
+        numbers: `closest text ${worst.other}; lines ${text.lines.map(boxText).join(" | ")}`,
+      },
+      worst.overlap,
+      0.5,
+    );
+  }
+}
+
 /** StrictMode fires the seed request twice. */
 function pendingAnalyzeRequests(page: Page): () => number {
   let pending = 0;
@@ -600,6 +704,7 @@ for (const sentence of SENTENCES) {
       )
       .toEqual([...sentence.rubies].sort());
     checkGeometry(sentence, measurement);
+    checkLinksAndRows(sentence, measurement);
     logTightest(
       `furigana sentence ${sentence.number} ${sentence.text}, tightest margin per predicate:`,
       observations.slice(firstObservation),
