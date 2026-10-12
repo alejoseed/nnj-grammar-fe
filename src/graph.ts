@@ -22,6 +22,7 @@ const GLOSS_LINE_PX = 1.2 * GLOSS_FONT_PX;
 const GLOSS_UNDER_LABEL_PX = 1.5 * PRIMARY_FONT_PX - GLOSS_FONT_PX / 2;
 const RUBY_FONT_PX = 7;
 const HOVER_RADIUS_PX = 10;
+const NODE_RADIUS_PX = 6;
 const LINK_STROKE_PX = 1.5;
 // How far the ruby baseline sits above the label baseline. It is the label's
 // ascent plus the ruby's descent, so the ruby's font box rests on the label's.
@@ -579,17 +580,12 @@ function ariaLabel(node: GraphNode): string {
 function applyEmphasis(group: NodeSelection, active: boolean): void {
   group
     .select<SVGCircleElement>("circle")
-    .attr("r", active ? HOVER_RADIUS_PX : 6)
+    .style("transform", active ? `scale(${HOVER_RADIUS_PX / NODE_RADIUS_PX})` : "")
     .style("fill", active ? EMPHASIS_COLOR : "");
 
   group.selectAll<SVGTextElement, unknown>("text").each(function () {
     this.style.fill = active ? EMPHASIS_COLOR : "";
   });
-  group
-    .selectAll<SVGTextElement, unknown>("text:not(.graph-ruby)")
-    .each(function () {
-      this.style.fontWeight = active ? "bold" : "normal";
-    });
 }
 
 // Activation returns true only when handled, so desktop keyboard behavior
@@ -654,9 +650,9 @@ export function renderGraph(
     .attr(
       "class",
       (point) =>
-        `stroke-fog transition-all duration-200 ${restingFillClass(point)}`,
+        `stroke-fog transition duration-200 ${restingFillClass(point)}`,
     )
-    .attr("r", 6)
+    .attr("r", NODE_RADIUS_PX)
     .attr("stroke-width", 1);
     
   // node
@@ -672,7 +668,7 @@ export function renderGraph(
     .attr(
       "class",
       (point) =>
-        `graph-primary-label text-[12px] transition-all duration-200 ${
+        `graph-primary-label text-[12px] transition-colors duration-200 ${
           point.data.kind === "relation" ? "fill-moss" : "fill-aizome"
         }`,
     )
@@ -685,7 +681,7 @@ export function renderGraph(
     .append("text")
     .attr(
       "class",
-      "graph-secondary-label fill-fog text-[10px] italic transition-all duration-200",
+      "graph-secondary-label fill-fog text-[10px] italic transition-colors duration-200",
     )
     .attr("x", (point) => (point.children ? -10 : 10))
     .attr("text-anchor", (point) => (point.children ? "end" : "start"))
@@ -705,7 +701,7 @@ export function renderGraph(
     .join("text")
     // A size class built from RUBY_FONT_PX is invisible to Tailwind's source
     // scan, so the size is an attribute.
-    .attr("class", "graph-ruby fill-fog transition-all duration-200")
+    .attr("class", "graph-ruby fill-fog transition-colors duration-200")
     .attr("font-size", RUBY_FONT_PX)
     .attr("text-anchor", "middle")
     .attr("aria-hidden", "true")

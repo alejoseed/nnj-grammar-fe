@@ -72,12 +72,9 @@ describe("renderGraph", () => {
       node.dispatchEvent(new Event(eventName));
       vi.advanceTimersByTime(200);
       timerFlush();
-      expect(node.querySelector("circle")?.getAttribute("r")).toBe("10");
+      expect(node.querySelector<SVGCircleElement>("circle")?.style.transform).toBe(`scale(${10 / 6})`);
       expect(node.querySelector<SVGCircleElement>("circle")?.style.fill).toBe(
         "var(--color-shu)",
-      );
-      expect(node.querySelector<SVGTextElement>("text")?.style.fontWeight).toBe(
-        "bold",
       );
       expect(node.querySelector<SVGTextElement>("text")?.style.fill).toBe(
         "var(--color-shu)",
@@ -86,7 +83,7 @@ describe("renderGraph", () => {
       node.dispatchEvent(
         new Event(eventName === "mouseenter" ? "mouseleave" : "blur"),
       );
-      expect(node.querySelector("circle")?.getAttribute("r")).toBe("6");
+      expect(node.querySelector<SVGCircleElement>("circle")?.style.transform).toBe("");
       expect(node.querySelector<SVGCircleElement>("circle")?.style.fill).toBe(
         "",
       );
@@ -94,9 +91,6 @@ describe("renderGraph", () => {
         node.querySelector("circle")?.classList.contains("fill-washi"),
       ).toBe(true);
       expect(node.querySelector<SVGTextElement>("text")?.style.fill).toBe("");
-      expect(node.querySelector<SVGTextElement>("text")?.style.fontWeight).toBe(
-        "normal",
-      );
     },
   );
 
@@ -105,9 +99,9 @@ describe("renderGraph", () => {
     node.dispatchEvent(new Event("focus"));
     node.dispatchEvent(new Event("mouseenter"));
     node.dispatchEvent(new Event("mouseleave"));
-    expect(node.querySelector("circle")?.getAttribute("r")).toBe("10");
+    expect(node.querySelector<SVGCircleElement>("circle")?.style.transform).toBe(`scale(${10 / 6})`);
 
     node.dispatchEvent(new Event("blur"));
-    expect(node.querySelector("circle")?.getAttribute("r")).toBe("6");
+    expect(node.querySelector<SVGCircleElement>("circle")?.style.transform).toBe("");
   });
 });
