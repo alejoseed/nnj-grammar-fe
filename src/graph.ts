@@ -1,4 +1,5 @@
 import * as d3 from "d3";
+import { wrapGloss } from "./gloss-lines";
 import type { GraphNode, RubyRun } from "./graph-model";
 import { layoutRuby, type MeasuredRun } from "./ruby-layout";
 
@@ -11,27 +12,74 @@ const HORIZONTAL_LABEL_GAP = 32;
 const NODE_TOP = 40;
 const MARGIN = { top: 20, left: 200 };
 const PRIMARY_FONT_PX = 12;
+const GLOSS_FONT_PX = 10;
+const GLOSS_LINE_PX = 1.2 * GLOSS_FONT_PX;
+const GLOSS_UNDER_LABEL_PX = 1.5 * PRIMARY_FONT_PX - GLOSS_FONT_PX / 2;
 const RUBY_FONT_PX = 7;
 const HOVER_RADIUS_PX = 10;
 // How far the ruby baseline sits above the label baseline. It is the label's
 // ascent plus the ruby's descent, so the ruby's font box rests on the label's.
 // Chromium's default CJK fallback measures 12.2px and 3.1px at 12px and 7px.
 const RUBY_RISE_PX = 15;
+const LABEL_CLEARANCE_PX = 2;
+const LEVEL_TOLERANCE_PX = 0.5;
 
-// Palette tokens live in styles.css (@theme). Resting colors are Tailwind
-// classes; emphasis is an inline style so it wins over them while active.
 const EMPHASIS_COLOR = "var(--color-shu)";
 
 type PointNode = d3.HierarchyPointNode<GraphNode>;
 type NodeSelection = d3.Selection<SVGGElement, PointNode, d3.BaseType, unknown>;
 type HorizontalExtent = { left: number; right: number };
+type LabelSide = "above" | "below" | "right";
 
-function labelBaseline(point: PointNode): number {
-  // 35 / 100 rather than 0.35 keeps the attribute "4.2", not 4.199999999999999.
-  return point.children ? -1.5 * PRIMARY_FONT_PX : (35 * PRIMARY_FONT_PX) / 100;
+interface LabelBlock {
+  primaryY: number;
+  firstGlossY: number;
+  top: number;
+  bottom: number;
 }
 
-function textFontPx(text: SVGTextElement): number {
+type Reach = Pick<LabelBlock, "top" | "bottom">;
+
+function primaryBaseline(side: LabelSide, glossLift: number): number {
+  switch (side) {
+    case "above":
+      return -1.5 * PRIMARY_FONT_PX - glossLift;
+    case "below":
+      return HOVER_RADIUS_PX + RUBY_FONT_PX + RUBY_RISE_PX;
+    case "right":
+      // 35 / 100 rather than 0.35 keeps the attribute "4.2", not 4.199999999999999.
+      return (35 * PRIMARY_FONT_PX) / 100;
+  }
+}
+
+function labelBlock(side: LabelSide, glossLines: number): LabelBlock {
+  const glossLift = GLOSS_LINE_PX * Math.max(0, glossLines - 1);
+  const primaryY = primaryBaseline(side, glossLift);
+  const firstGlossY = side === "right" ? 1.5 * GLOSS_FONT_PX : primaryY + GLOSS_UNDER_LABEL_PX;
+  const descent = (fontPx: number): number => fontPx / 4;
+  const rubyTop = primaryY - RUBY_RISE_PX - RUBY_FONT_PX;
+  const textBottom =
+    glossLines > 0
+      ? firstGlossY + glossLift + descent(GLOSS_FONT_PX)
+      : primaryY + descent(PRIMARY_FONT_PX);
+  return {
+    primaryY,
+    firstGlossY,
+    top: Math.min(-HOVER_RADIUS_PX, rubyTop),
+    bottom: Math.max(HOVER_RADIUS_PX, textBottom),
+  };
+}
+
+function labelSide(point: PointNode): LabelSide {
+  if (!point.children) {
+    return "right";
+  }
+  return point.parent && point.parent.x < point.x - LEVEL_TOLERANCE_PX
+    ? "below"
+    : "above";
+}
+
+function textFontPx(text: SVGTextContentElement): number {
   const attribute = Number(text.getAttribute("font-size"));
   if (attribute > 0) {
     return attribute;
@@ -72,7 +120,10 @@ function characterAdvances(text: SVGTextElement): number[] {
   }
 }
 
-function measuredTextWidth(text: SVGTextElement): number {
+function measuredTextWidth(
+  text: SVGTextContentElement,
+  fontPx = textFontPx(text),
+): number {
   const fixed = Number(text.getAttribute("textLength"));
   if (fixed > 0) {
     return fixed;
@@ -86,10 +137,19 @@ function measuredTextWidth(text: SVGTextElement): number {
     // jsdom does not implement SVG text measurement.
   }
 
-  return estimatedAdvances(text.textContent ?? "", textFontPx(text)).reduce(
+  return estimatedAdvances(text.textContent ?? "", fontPx).reduce(
     (total, advance) => total + advance,
     0,
   );
+}
+
+function widestLineWidth(text: SVGTextElement): number {
+  const lines = text.querySelectorAll<SVGTSpanElement>("tspan");
+  if (lines.length === 0) {
+    return measuredTextWidth(text);
+  }
+  const fontPx = textFontPx(text);
+  return Math.max(...Array.from(lines, (line) => measuredTextWidth(line, fontPx)));
 }
 
 function textLeft(text: SVGTextElement, width: number): number {
@@ -101,7 +161,7 @@ function textLeft(text: SVGTextElement, width: number): number {
   return anchor === "middle" ? x - width / 2 : x;
 }
 
-export function placeRuby(group: SVGGElement, point: PointNode): void {
+export function placeRuby(group: SVGGElement): void {
   const primary = group.querySelector<SVGTextElement>("text.graph-primary-label");
   const measured: Array<MeasuredRun & { element: SVGTextElement }> = [];
   d3.select(group)
@@ -119,7 +179,7 @@ export function placeRuby(group: SVGGElement, point: PointNode): void {
     primary,
     advances.reduce((total, advance) => total + advance, 0),
   );
-  const baseline = labelBaseline(point) - RUBY_RISE_PX;
+  const baseline = Number(primary.getAttribute("dy")) - RUBY_RISE_PX;
   const placements = layoutRuby(measured, advances);
   for (const { element, center, width, compressed } of placements) {
     element.setAttribute("x", String(labelLeft + center));
@@ -139,7 +199,7 @@ function measureDepthExtents(nodes: NodeSelection): Map<number, HorizontalExtent
     let right = 10;
 
     for (const text of this.querySelectorAll<SVGTextElement>("text")) {
-      const width = measuredTextWidth(text);
+      const width = widestLineWidth(text);
       const leftEdge = textLeft(text, width);
       left = Math.min(left, leftEdge);
       right = Math.max(right, leftEdge + width);
@@ -215,10 +275,46 @@ export function renderGraph(
 ): void {
   host.replaceChildren();
 
+  const hierarchy = d3.hierarchy(model, (node) => node.children);
+  const glossLines = new Map<GraphNode, string[]>();
+  hierarchy.each((point) => {
+    glossLines.set(point.data, wrapGloss(point.data.secondaryLabel));
+  });
+  const linesOf = (node: GraphNode): string[] => glossLines.get(node) ?? [];
+  // Separation runs before any node has a position. d3 centers a parent
+  // between its first and last children, so a first or only child's parent
+  // is below or level and a last child's is above. A middle child's side
+  // depends on the layout that this reach feeds, so it reserves both sides.
+  const layoutReach = (node: d3.HierarchyNode<GraphNode>): Reach => {
+    const lines = linesOf(node.data).length;
+    if (!node.children) {
+      return labelBlock("right", lines);
+    }
+    const siblings = node.parent?.children ?? [node];
+    if (node === siblings[0]) {
+      return labelBlock("above", lines);
+    }
+    if (node === siblings.at(-1)) {
+      return labelBlock("below", lines);
+    }
+    return { top: labelBlock("above", lines).top, bottom: labelBlock("below", lines).bottom };
+  };
+  const breadthFirst = hierarchy.descendants();
   const layout = d3
     .tree<GraphNode>()
-    .nodeSize([VERTICAL_NODE_GAP, 1]);
-  const root = layout(d3.hierarchy(model, (node) => node.children));
+    .nodeSize([VERTICAL_NODE_GAP, 1])
+    .separation((a, b) => {
+      // d3 passes the pair in either order.
+      const [upper, lower] =
+        breadthFirst.indexOf(a) < breadthFirst.indexOf(b) ? [a, b] : [b, a];
+      const gap =
+        layoutReach(upper).bottom - layoutReach(lower).top + LABEL_CLEARANCE_PX;
+      const cousinRow = a.parent === b.parent ? 0 : 1;
+      return cousinRow + Math.max(1, gap / VERTICAL_NODE_GAP);
+    });
+  const root = layout(hierarchy);
+  const blockOf = (point: PointNode): LabelBlock =>
+    labelBlock(labelSide(point), linesOf(point.data).length);
   const points = root.descendants();
   const minimumVerticalPosition = d3.min(points, (point) => point.x) ?? 0;
   const verticalOffset = NODE_TOP - minimumVerticalPosition;
@@ -284,7 +380,13 @@ export function renderGraph(
     )
     .attr("r", 6)
     .attr("stroke-width", 1);
-
+    
+  // node
+  //   .filter((point) => point.data.primaryLabel !== "")
+  //   .append("text")
+  //   .attr("x", (point) => (point.children ? - : 10))
+  //   .attr("dy", (point) => (point.children ? "-5.5em" : "2.70em"))
+  //   .text("TEST-101")
   node
     .filter((point) => point.data.primaryLabel !== "")
     .append("text")
@@ -297,21 +399,30 @@ export function renderGraph(
         }`,
     )
     .attr("x", (point) => (point.children ? -10 : 10))
-    .attr("dy", labelBaseline)
+    .attr("dy", (point) => blockOf(point).primaryY)
     .attr("text-anchor", (point) => (point.children ? "end" : "start"))
     .text((point) => point.data.primaryLabel);
 
   node
-    .filter((point) => point.data.secondaryLabel !== "")
+    .filter((point) => linesOf(point.data).length > 0)
     .append("text")
     .attr(
       "class",
       "graph-secondary-label fill-fog text-[10px] italic transition-all duration-200",
     )
     .attr("x", (point) => (point.children ? -10 : 10))
-    .attr("dy", (point) => (point.children ? "-.5em" : "1.5em"))
     .attr("text-anchor", (point) => (point.children ? "end" : "start"))
-    .text((point) => `(${point.data.secondaryLabel})`);
+    .each(function (point) {
+      const { firstGlossY } = blockOf(point);
+      const lines = linesOf(point.data);
+      lines.forEach((line, index) => {
+        d3.select(this)
+          .append("tspan")
+          .attr("x", point.children ? -10 : 10)
+          .attr("y", firstGlossY + GLOSS_LINE_PX * index)
+          .text(`${index === 0 ? "(" : ""}${line}${index === lines.length - 1 ? ")" : ""}`);
+      });
+    });
 
   node
     .selectAll<SVGTextElement, RubyRun>("text.graph-ruby")
@@ -326,8 +437,8 @@ export function renderGraph(
     .attr("data-ruby-start", (run) => run.start)
     .attr("data-ruby-length", (run) => run.length)
     .text((run) => run.reading);
-  node.each(function (point) {
-    placeRuby(this, point);
+  node.each(function () {
+    placeRuby(this);
   });
 
   depthColumns = placeDepthColumns(measureDepthExtents(node), root.height);
