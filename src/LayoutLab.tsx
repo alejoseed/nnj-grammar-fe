@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { z } from "zod";
+import { submitLayout } from "./api";
 import { renderGraph } from "./graph";
 import { buildGraphModel } from "./graph-model";
 import { attachLayoutLab, type LayoutLab as Controller } from "./layout-lab";
@@ -21,6 +22,26 @@ import type { AnalysisDocument } from "./types";
 
 const ROUTE = "/__layout-lab";
 const SaveResult = z.object({ path: z.string().optional(), error: z.string().optional() });
+
+const SUBMITTER_STORAGE_KEY = "nnj-grammar.submitter";
+const Submitter = z.object({ classCode: z.string(), nickname: z.string() });
+type Submitter = z.infer<typeof Submitter>;
+
+function loadSubmitter(): Submitter {
+  try {
+    const saved = Submitter.safeParse(JSON.parse(localStorage.getItem(SUBMITTER_STORAGE_KEY) ?? "null"));
+    return saved.success ? saved.data : { classCode: "", nickname: "" };
+  } catch {
+    return { classCode: "", nickname: "" };
+  }
+}
+
+function saveSubmitter(submitter: Submitter): void {
+  try {
+    localStorage.setItem(SUBMITTER_STORAGE_KEY, JSON.stringify(submitter));
+  } catch {
+  }
+}
 
 type LayoutLabProps = {
   host: RefObject<HTMLDivElement | null>;
@@ -70,6 +91,7 @@ function download(name: string, text: string): void {
   URL.revokeObjectURL(url);
 }
 
+
 export default function LayoutLab({ host, doc, settings, onSettingsChange, onExit }: LayoutLabProps) {
   const controller = useRef<Controller | null>(null);
   const lastArrangement = useRef<LayoutFeedback | null>(null);
@@ -78,6 +100,8 @@ export default function LayoutLab({ host, doc, settings, onSettingsChange, onExi
   const [notes, setNotes] = useState("");
   const [status, setStatus] = useState("");
   const [handles, setHandles] = useState(false);
+  const [submitter, setSubmitter] = useState(loadSubmitter);
+  const [sending, setSending] = useState(false);
   const key = feedback ? feedbackKey(doc.input, feedback.viewport.compact) : null;
 
   useEffect(() => {
@@ -126,32 +150,56 @@ export default function LayoutLab({ host, doc, settings, onSettingsChange, onExi
     controller.current?.showHandles(handles);
   }, [handles, feedback]);
 
-  async function saveArrangement(): Promise<void> {
+  function arrangement(): LayoutFeedback | null {
     const lab = controller.current;
-    if (!lab || !key) {
+    return lab ? { ...lab.snapshot(), notes, settings } : null;
+  }
+
+  async function saveToRepo(): Promise<void> {
+    const current = arrangement();
+    if (!current || !key) {
       return;
     }
-    const payload = JSON.stringify({ ...lab.snapshot(), notes, settings }, null, 2);
     setStatus("Saving…");
     try {
       const response = await fetch(`${ROUTE}/entry?key=${encodeURIComponent(key)}`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: payload,
+        body: JSON.stringify(current, null, 2),
       });
       const result = SaveResult.safeParse(await response.json());
       if (response.ok && result.success && result.data.path) {
         setStatus(`Saved ${result.data.path}`);
         return;
       }
-      if (response.status === 400 && result.success && result.data.error) {
-        setStatus(`Save failed: ${result.data.error}`);
-        return;
-      }
+      setStatus(`Save failed: ${result.success && result.data.error ? result.data.error : response.status}`);
     } catch {
+      setStatus("Save failed: the dev server did not answer");
     }
-    download(`${key}.json`, payload);
-    setStatus(`Downloaded ${key}.json. Send it to the author as feedback.`);
+  }
+
+  async function sendToTeacher(): Promise<void> {
+    const current = arrangement();
+    if (!current || !key) {
+      return;
+    }
+    if (submitter.classCode.trim() === "") {
+      setStatus("Enter the class code from the board first");
+      return;
+    }
+    saveSubmitter(submitter);
+    setSending(true);
+    setStatus("Sending…");
+    const result = await submitLayout(submitter.classCode, submitter.nickname, current);
+    setSending(false);
+    if (result.kind === "sent") {
+      setStatus(`Sent. Thank you! (#${result.id})`);
+    } else if (result.kind === "refused") {
+      setStatus(result.message);
+    } else {
+      download(`${key}.json`, JSON.stringify(current, null, 2));
+      setStatus(`The server could not take it, so ${key}.json downloaded. Send it directly to me at alejandrojpalmar@hotmail.com.`);
+    }
   }
 
   const changeSetting = <K extends keyof LayoutSettings>(name: K, value: LayoutSettings[K]) =>
@@ -272,17 +320,54 @@ export default function LayoutLab({ host, doc, settings, onSettingsChange, onExi
           aria-label="Notes about this arrangement"
           value={notes}
           onChange={(event) => setNotes(event.target.value)}
-          placeholder="What makes this arrangement right?"
+          placeholder="Why is this arrangement better?"
           rows={2}
           className="w-full resize-y rounded-lg border border-mist px-2 py-1 text-sm text-aizome outline-none focus:border-aizome"
         />
+        <div className="grid grid-cols-2 gap-2">
+          <label className="flex flex-col gap-1 text-xs text-fog">
+            Class code
+            <input
+              value={submitter.classCode}
+              onChange={(event) => setSubmitter({ ...submitter, classCode: event.target.value })}
+              autoCapitalize="characters"
+              autoComplete="off"
+              spellCheck={false}
+              maxLength={32}
+              className="h-8 rounded-lg border border-mist px-2 text-sm text-aizome uppercase outline-none focus:border-aizome"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-fog">
+            Nickname (optional)
+            <input
+              value={submitter.nickname}
+              onChange={(event) => setSubmitter({ ...submitter, nickname: event.target.value })}
+              autoComplete="nickname"
+              maxLength={40}
+              className="h-8 rounded-lg border border-mist px-2 text-sm text-aizome outline-none focus:border-aizome"
+            />
+          </label>
+        </div>
+        <p className="text-xs text-fog">
+          This browser keeps an anonymous id so your arrangements stay together.
+        </p>
         <div className="flex flex-wrap gap-2">
-          <button type="button" onClick={() => void saveArrangement()} className={primaryButton}>
-            Save arrangement
+          <button
+            type="button"
+            disabled={sending}
+            onClick={() => void sendToTeacher()}
+            className={`${primaryButton} disabled:opacity-40`}
+          >
+            Send to Alejandro
           </button>
           <button type="button" onClick={() => controller.current?.reset()} className={quietButton}>
             Reset
           </button>
+          {import.meta.env.DEV && (
+            <button type="button" onClick={() => void saveToRepo()} className={quietButton}>
+              Save to repo
+            </button>
+          )}
         </div>
       </section>
       <p aria-live="polite" className="min-h-4 truncate text-xs text-fog" title={status}>
